@@ -18,9 +18,8 @@ But I do not love them, not at all. I long ago ceded to the fact that I can't ju
 pip install -r requirements.txt
 ```
 
-# Usage
-## Prerequisites
-### For personal Office 365 authentication and API access:
+# Prerequisites
+## For personal Office 365 authentication and API access:
 
 Instead of Azure AD, you'll use the Microsoft Identity Platform (formerly known as Microsoft Account) for authentication.
 
@@ -30,18 +29,51 @@ Instead of Azure AD, you'll use the Microsoft Identity Platform (formerly known 
     - Name your app and select "Accounts in any organizational directory (Any Azure AD directory - Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)"
     - For Redirect URI, select "Public client/native (mobile & desktop)" and enter "http://localhost"
     - After registration, note down the Application (client) ID
+    - Update the CLIENT_ID in the script to your client id (or use your favorite vault, env var, or whatever code you prefer)
 
-- Set up authentication using the OAuth 2.0 authorization code flow.
+The script now uses interactive authentication. When you run it, it will open a web browser for you to log in with your personal Microsoft account.
+The script assumes your files are in the root of your OneDrive. Adjust the file paths as needed.
+# Preparation
+Create the cover letter template by modifying your favorite cover letter so that the strings COMPANY, ATTN_NAME, ATTN_TITLE appear in the appropriate places instead of a specific company, person, and their title.
 
+# Usage
+```bash
+$ python recover.py -h
 
-- Use the Microsoft Graph SDK for Python to interact with your files.
+usage: python recover.py [-h] -i INPUT --company COMPANY --attn_name ATTN_NAME --attn_title ATTN_TITLE -o OUTPUT
 
-# TODO
+Generate a customized cover letter
+
+options:
+  -h, --help            show this help message and exit
+  -i INPUT, --input INPUT
+                        Input template (.docx) file name
+  --company COMPANY     Company name
+  --attn_name ATTN_NAME
+                        Attention name
+  --attn_title ATTN_TITLE
+                        Attention title
+  -o OUTPUT, --output OUTPUT
+                        Output file name
+```
+# TODO (Unfinished)
+- Token Caching
+- Easy Scope Adjustments? 
+    - PDF conversion in OneDrive?
+- File Locations 
+    - presently we assume files are in the root of OneDrive. 
+- Better Error Handling 
+- Actual PDF Conversion
+    - Graph API doesn't directly support converting to PDF for personal accounts,
+        - python-docx-to-pdf?
+
+# TODO (Next)
 - Add ability to replace entire text body
+- Add better CLIENT_ID support (environment var, retrieve from vault, etc.)
+
 # TODO (possibly)
 - Support modifying font, font size, font color?
 - Add support for AAD and AAD application for those who want to send resumes using their corporate Enterprise user for some reason
     (using office365 REST API? SharePoint/OneDrive? Haven't started looking into this yet; just jotting thoughts, but it's what I looked at before settling  on msgraph API)
 - Add support for certs instead of user credentials
-- 
 
