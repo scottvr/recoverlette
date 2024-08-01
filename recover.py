@@ -1,7 +1,7 @@
 import argparse
 import requests
 from msal import PublicClientApplication
-from msgraph import GraphClient
+from msgraph_core import GraphClient
 
 # These values can be obtained from your app registration
 CLIENT_ID = "YOUR_CLIENT_ID"
