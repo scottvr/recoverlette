@@ -1,18 +1,15 @@
-### recoverlette
+# recoverlette
 quickly rewrite job application cover letter Office365 documents (.docx files in the cloud) and export as PDF (local) without all the mouse clickery.
 
-# Why and Wherefore
+## Why and Wherefore
 Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
-# Installation
+## Installation
 ```
 pip install -r requirements.txt
 ```
 
-# Prerequisites
-## For personal Office 365 authentication and API access:
-
-Instead of Azure AD, you'll use the Microsoft Identity Platform (formerly known as Microsoft Account) for authentication.
-
+## Prerequisites
+### For personal Office 365 authentication and API access:
 - Register your application in the Microsoft Application Registration Portal 
     - Go to https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
     - Click "New registration"
@@ -22,11 +19,12 @@ Instead of Azure AD, you'll use the Microsoft Identity Platform (formerly known 
     - Update the CLIENT_ID in the script to your client id (or use your favorite vault, env var, or whatever code you prefer)
 
 The script now uses interactive authentication. When you run it, it will open a web browser for you to log in with your personal Microsoft account.
-The script assumes your files are in the root of your OneDrive. Adjust the file paths as needed.
-# Preparation
-Create the cover letter template by modifying your favorite cover letter so that the strings COMPANY, ATTN_NAME, ATTN_TITLE appear in the appropriate places instead of a specific company, person, and their title.
+### Template Preparation
+- Create the cover letter template by modifying your favorite cover letter so that the strings COMPANY, ATTN_NAME, ATTN_TITLE appear in the appropriate places instead of a specific company, person, and their title.
 
-# Usage
+The script assumes your template file(s) are in the root of your OneDrive. Adjust the file paths as needed.
+
+## Usage
 ```bash
 $ python recover.py -h
 
@@ -46,7 +44,8 @@ options:
   -o OUTPUT, --output OUTPUT
                         Output file name
 ```
-# TODO (Unfinished)
+## TODO 
+### (Unfinished)
 - Token Caching
 - Easy Scope Adjustments? 
     - PDF conversion in OneDrive?
@@ -57,12 +56,12 @@ options:
     - Graph API doesn't directly support converting to PDF for personal accounts,
         - python-docx-to-pdf?
 
-# TODO (Next)
+### (Next)
 - Add ability to replace entire text body
 - Add local .docx support (input and output)
 - Add better CLIENT_ID support (environment var, retrieve from vault, etc.)
 
-# TODO (possibly)
+### (possibly)
 - Add OneDrive PDF output? (see SharePoint item below)
 - Support modifying font, font size, font color?
 - Add support for AAD and AAD application for those who want to send resumes using their corporate Enterprise user for some reason
