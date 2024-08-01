@@ -1,5 +1,5 @@
 # recoverlette
-quickly rewrite job application cover letter Word documents (stored in the cloud) and export as PDF (local) without all the mouse clickery.
+quickly rewrite job application cover letter Office365 documents (.docx files in the cloud) and export as PDF (local) without all the mouse clickery.
 
 # Why and Wherefore
 Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
