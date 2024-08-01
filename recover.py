@@ -1,7 +1,7 @@
 import argparse
 import requests
 from msal import PublicClientApplication
-from msgraph_core import BaseRequestAdapter
+from msgraph_core import BaseGraphRequestAdapter
 
 # These values can be obtained from your app registration
 CLIENT_ID = "YOUR_CLIENT_ID"
@@ -20,7 +20,7 @@ def authenticate():
         return None
 
 def get_file_content(access_token, file_path):
-    graph_client = BaseRequestAdapter(credential=access_token)
+    graph_client = BaseGraphRequestAdapter(credential=access_token)
     drive_item = graph_client.get(f"/me/drive/root:/{file_path}")
     if drive_item.status_code == 200:
         file_content = graph_client.get(f"/me/drive/items/{drive_item.data['id']}/content")
@@ -30,7 +30,7 @@ def get_file_content(access_token, file_path):
         return None
 
 def update_file_content(access_token, file_path, content):
-    graph_client = BaseRequestAdapter(credential=access_token)
+    graph_client = BaseGraphRequestAdapter(credential=access_token)
     drive_item = graph_client.get(f"/me/drive/root:/{file_path}")
     if drive_item.status_code == 200:
         update_response = graph_client.put(f"/me/drive/items/{drive_item.data['id']}/content",
