@@ -1,5 +1,5 @@
 # recoverlette
-quickly rewrite job application cover letter Word documents and export as PDF
+quickly rewrite job application cover letter Word documents (stored in the cloud) and export as PDF (local) without all the mouse clickery.
 
 # Why and Wherefore
 Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
@@ -59,9 +59,11 @@ options:
 
 # TODO (Next)
 - Add ability to replace entire text body
+- Add local .docx support (input and output)
 - Add better CLIENT_ID support (environment var, retrieve from vault, etc.)
 
 # TODO (possibly)
+- Add OneDrive PDF output? (see SharePoint item below)
 - Support modifying font, font size, font color?
 - Add support for AAD and AAD application for those who want to send resumes using their corporate Enterprise user for some reason
     (using office365 REST API? SharePoint/OneDrive? Haven't started looking into this yet; just jotting thoughts, but it's what I looked at before settling  on msgraph API)
