@@ -6,11 +6,9 @@ import requests # Still potentially useful for fallback
 import sys
 import uuid # For generating unique temporary filenames
 from pathlib import Path # For path manipulation
+import re # For parsing -D arguments, though not for docx replacement itself
 
 # --- Load .env file ---
-# Load environment variables from a .env file if it exists
-# This allows for easier configuration without setting shell variables
-# Environment variables set directly in the shell will override .env file values
 from dotenv import load_dotenv
 load_dotenv()
 # --- End Load .env file ---
@@ -23,23 +21,33 @@ from msgraph.generated.models.drive_item import DriveItem # For type hinting
 from msgraph.generated.models.item_reference import ItemReference # For parent reference
 
 # --- Configuration Loading ---
-# Load configuration from environment variables (which now include .env values)
 CLIENT_ID = os.getenv("RECOVERLETTE_CLIENT_ID")
-# Default to 'consumers' tenant for personal accounts if not specified in .env or shell
 TENANT_ID = os.getenv("RECOVERLETTE_TENANT_ID", "consumers")
 
-# Check if critical configuration is missing
 if not CLIENT_ID:
     print("Error: Configuration variable RECOVERLETTE_CLIENT_ID is not set.", file=sys.stderr)
     print("Please set this variable in a .env file or as an environment variable.", file=sys.stderr)
-    sys.exit(1) # Exit if Client ID is missing
+    sys.exit(1)
 
-SCOPES = ['Files.ReadWrite'] # Sufficient scope
+SCOPES = ['Files.ReadWrite']
+
+# --- Helper Class for Argument Parsing ---
+class DefineAction(argparse.Action):
+    """Custom action to parse KEY=VALUE pairs for definitions."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        definitions = getattr(namespace, self.dest, {}) or {}
+        for value_pair in values:
+            if '=' not in value_pair:
+                raise argparse.ArgumentError(self, f"Invalid definition format: '{value_pair}'. Use KEY=VALUE.")
+            key, value = value_pair.split('=', 1)
+            definitions[key.strip()] = value.strip()
+        setattr(namespace, self.dest, definitions)
 
 # --- Authentication ---
 async def get_authenticated_client() -> GraphServiceClient | None:
-    """Creates and returns an authenticated GraphServiceClient using environment variables."""
-    print(f"Using Client ID: ***{CLIENT_ID[-4:]}") # Print only last 4 chars for security
+    """Creates and returns an authenticated GraphServiceClient."""
+    # (Same as previous version)
+    print(f"Using Client ID: ***{CLIENT_ID[-4:]}")
     print(f"Using Tenant ID: {TENANT_ID}")
     try:
          credential = DeviceCodeCredential(client_id=CLIENT_ID, tenant_id=TENANT_ID)
@@ -67,10 +75,10 @@ async def get_authenticated_client() -> GraphServiceClient | None:
         print(f"An unexpected error occurred during authentication: {e}", file=sys.stderr)
         return None
 
-# --- Graph Operations (get_drive_item_details, get_file_content, etc.) ---
-# ... (Keep the async functions from the previous version here) ...
+# --- Graph Operations ---
 async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> tuple[str | None, str | None]:
-    """Gets the OneDrive item ID and parent folder ID for a given file path."""
+    """Gets the OneDrive item ID and parent folder ID."""
+    # (Same as previous version)
     item_id = None
     parent_folder_id = None
     try:
@@ -78,7 +86,6 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
         drive_item = await client.me.drive.root.get_item(encoded_file_path).get(
             request_configuration=lambda config: config.query_parameters.select = ["id", "parentReference"]
             )
-
         if drive_item and drive_item.id:
             item_id = drive_item.id
             if drive_item.parent_reference and drive_item.parent_reference.id:
@@ -87,15 +94,12 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
                  root_item = await client.me.drive.root.get(request_configuration=lambda config: config.query_parameters.select = ["id"])
                  if root_item and root_item.id:
                      parent_folder_id = root_item.id
-
             if parent_folder_id:
                  print(f"Found Item ID: {item_id}, Parent Folder ID: {parent_folder_id} for path: {file_path}")
             else:
                  print(f"Found Item ID: {item_id} but could not determine Parent Folder ID for path: {file_path}", file=sys.stderr)
-
         else:
             print(f"Error: Could not retrieve item ID for {file_path}", file=sys.stderr)
-
     except ODataError as o_data_error:
         print(f"Error getting item details for {file_path}:", file=sys.stderr)
         if o_data_error.error:
@@ -103,12 +107,11 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
             print(f"  Message: {o_data_error.error.message}", file=sys.stderr)
     except Exception as e:
         print(f"An unexpected error occurred getting item details for {file_path}: {e}", file=sys.stderr)
-
     return item_id, parent_folder_id
-
 
 async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | None:
     """Downloads file content for a given item ID."""
+    # (Same as previous version)
     try:
         content_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get()
         if content_stream:
@@ -132,15 +135,35 @@ async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | 
         print(f"An unexpected error occurred downloading content for {item_id}: {e}", file=sys.stderr)
         return None
 
-def replace_placeholders(content: bytes, company: str, attn_name: str, attn_title: str) -> bytes:
-    """Replaces placeholders in the byte content."""
-    content = content.replace(b"{{COMPANY}}", company.encode('utf-8'))
-    content = content.replace(b"{{ATTN_NAME}}", attn_name.encode('utf-8'))
-    content = content.replace(b"{{ATTN_TITLE}}", attn_title.encode('utf-8'))
-    return content
+# --- Placeholder Replacement ---
+def replace_placeholders(content: bytes, replacements: dict[str, str]) -> bytes:
+    """Replaces placeholders defined in the replacements dict in the byte content."""
+    if not replacements:
+        print("No replacements defined.")
+        return content
+        
+    print("Replacing placeholders...")
+    current_content = content
+    for key, value in replacements.items():
+        # Construct the placeholder string like {{KEY}}
+        placeholder = f"{{{{{key}}}}}".encode('utf-8')
+        replacement_value = value.encode('utf-8')
+        
+        # Perform byte replacement
+        # Count occurrences before replacing to report changes
+        count_before = current_content.count(placeholder)
+        if count_before > 0:
+            current_content = current_content.replace(placeholder, replacement_value)
+            print(f"  - Replaced '{placeholder.decode('utf-8')}' with '{value}' ({count_before} occurrence(s))")
+        else:
+             print(f"  - Placeholder '{{{{{key}}}}}' not found in template.")
+             
+    return current_content
 
+# --- File Upload/Download/Delete Operations ---
 async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, filename: str, content: bytes) -> str | None:
-    """Uploads content as a new temporary file in the specified parent folder."""
+    """Uploads content as a new temporary file."""
+    # (Same as previous version)
     temp_item_id = None
     try:
         response = await client.me.drive.items.by_drive_item_id(parent_folder_id).children.by_item_path(filename).content.put(content)
@@ -158,9 +181,9 @@ async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, fi
         print(f"An unexpected error occurred uploading temporary file '{filename}': {e}", file=sys.stderr)
     return temp_item_id
 
-
 async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_path: str) -> bool:
-    """Requests PDF conversion for the given item ID and saves the result locally."""
+    """Requests PDF conversion and saves the result locally."""
+    # (Same as previous version)
     try:
         print(f"Requesting PDF conversion for item {item_id}...")
         pdf_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get(
@@ -183,7 +206,7 @@ async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_
             return True
         except IOError as e:
             print(f"Error saving PDF file locally '{output_file_path}': {e}", file=sys.stderr)
-            return False # Indicate local save failed, even if download worked
+            return False
     except ODataError as o_data_error:
         print(f"Error during PDF conversion/download request for item {item_id}:", file=sys.stderr)
         if o_data_error.error:
@@ -194,9 +217,9 @@ async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_
         print(f"An unexpected error occurred during PDF download for {item_id}: {e}", file=sys.stderr)
         return False
 
-
 async def delete_drive_item(client: GraphServiceClient, item_id: str) -> bool:
     """Deletes a DriveItem by its ID."""
+    # (Same as previous version)
     try:
         await client.me.drive.items.by_drive_item_id(item_id).delete()
         print(f"Successfully deleted temporary item {item_id}.")
@@ -212,8 +235,8 @@ async def delete_drive_item(client: GraphServiceClient, item_id: str) -> bool:
         return False
 
 # --- Main Workflow ---
-async def main(input_onedrive_path: str, company: str, attn_name: str, attn_title: str, output_local_path: str):
-    """Main async workflow using temporary file approach."""
+async def main(input_onedrive_path: str, output_local_path: str, definitions: dict[str, str]):
+    """Main async workflow using temporary file approach and generic replacements."""
     
     client = await get_authenticated_client()
     if not client:
@@ -232,8 +255,8 @@ async def main(input_onedrive_path: str, company: str, attn_name: str, attn_titl
         print("Failed to retrieve template content or content is empty. Exiting.", file=sys.stderr)
         return
 
-    print("Replacing placeholders...")
-    updated_content = replace_placeholders(original_content, company, attn_name, attn_title)
+    # Replace placeholders using the dictionary from command line args
+    updated_content = replace_placeholders(original_content, definitions)
 
     original_path = Path(input_onedrive_path)
     temp_filename = f"{original_path.stem}_temp_{uuid.uuid4().hex}{original_path.suffix}"
@@ -247,25 +270,18 @@ async def main(input_onedrive_path: str, company: str, attn_name: str, attn_titl
         return
 
     pdf_download_successful = False
-    local_save_successful = False # Track local save status separately
+    local_save_successful = False
     try:
         print("Waiting briefly before requesting conversion...")
         await asyncio.sleep(5)
 
         print(f"Starting PDF download process for temporary item {temp_item_id}...")
-        # download_as_pdf now returns True only if local save also succeeds
         local_save_successful = await download_as_pdf(client, temp_item_id, output_local_path)
-        pdf_download_successful = local_save_successful # If save worked, download must have worked
+        pdf_download_successful = local_save_successful
 
     finally:
-        # Attempt to delete the temporary file if it was created AND
-        # if the PDF was successfully retrieved from Graph (even if local save failed)
-        # We determine PDF retrieval success by checking local_save_successful OR if download_as_pdf returned false due to Graph error
-        # A simple approach: Delete if the download_as_pdf call didn't fail on the Graph API step.
-        # We only know for sure download succeeded if local_save_successful is True.
-        # Let's delete only if local save succeeded to be cautious.
         if temp_item_id:
-            if local_save_successful:
+            if local_save_successful: # Only delete if PDF was generated AND saved locally
                  print(f"Attempting to delete temporary file {temp_item_id}...")
                  await delete_drive_item(client, temp_item_id)
             else:
@@ -278,15 +294,34 @@ async def main(input_onedrive_path: str, company: str, attn_name: str, attn_titl
         print("\nCover letter generation failed.", file=sys.stderr)
 
 
-# --- Entry Point ---
+# --- Entry Point (Modified) ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate a customized cover letter from a OneDrive template and save as local PDF")
-    # --- Arguments --- (Same as before)
-    parser.add_argument("-i", "--input", required=True, help="OneDrive path to the input template (.docx) file (e.g., 'Documents/CoverLetterTemplate.docx')")
-    parser.add_argument("--company", required=True, help="Company name")
-    parser.add_argument("--attn_name", required=True, help="Attention name")
-    parser.add_argument("--attn_title", required=True, help="Attention title")
-    parser.add_argument("-o", "--output", required=True, help="Local file path to save the output PDF (e.g., 'MyCoverLetter.pdf')")
+    parser = argparse.ArgumentParser(
+        description="Generate a customized cover letter from a OneDrive template and save as local PDF.",
+        formatter_class=argparse.RawTextHelpFormatter # Preserve formatting in help
+        )
+    parser.add_argument(
+        "-i", "--input", 
+        required=True, 
+        help="OneDrive path to the input template (.docx) file (e.g., 'Documents/CoverLetterTemplate.docx')"
+        )
+    parser.add_argument(
+        "-o", "--output", 
+        required=True, 
+        help="Local file path to save the output PDF (e.g., 'MyCoverLetter.pdf')"
+        )
+    parser.add_argument(
+        "-D", "--define",
+        metavar="KEY=VALUE",
+        nargs='+', # Accept one or more KEY=VALUE pairs
+        action=DefineAction, # Use custom action to build dictionary
+        dest='definitions', # Store result in args.definitions
+        default={}, # Default to empty dict if no -D args
+        help="Define placeholder replacements. Use the format KEY=VALUE.\n"
+             "The script will replace occurrences of {{KEY}} in the template with VALUE.\n"
+             "Multiple -D arguments can be provided, or multiple KEY=VALUE pairs after one -D.\n"
+             "Example: -D COMPANY=\"Example Inc.\" -D ATTN_NAME=\"Ms. Smith\""
+        )
 
     args = parser.parse_args()
 
@@ -303,12 +338,14 @@ if __name__ == "__main__":
     if not args.output.lower().endswith(".pdf"):
          print("Warning: Output file does not end with .pdf", file=sys.stderr)
 
-    # --- Run Main Async Function --- (Same as before)
+    # --- Run Main Async Function ---
     try:
-        asyncio.run(main(args.input, args.company, args.attn_name, args.attn_title, args.output))
+        # Pass the definitions dictionary to main
+        asyncio.run(main(args.input, args.output, args.definitions))
     except KeyboardInterrupt:
          print("\nOperation cancelled by user.", file=sys.stderr)
          sys.exit(1)
     except Exception as e:
         print(f"\nAn unexpected error occurred during execution: {e}", file=sys.stderr)
         sys.exit(1)
+
