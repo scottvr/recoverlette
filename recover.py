@@ -7,6 +7,14 @@ import sys
 import uuid # For generating unique temporary filenames
 from pathlib import Path # For path manipulation
 
+# --- Load .env file ---
+# Load environment variables from a .env file if it exists
+# This allows for easier configuration without setting shell variables
+# Environment variables set directly in the shell will override .env file values
+from dotenv import load_dotenv
+load_dotenv()
+# --- End Load .env file ---
+
 # Authentication & SDK Core
 from azure.identity.aio import DeviceCodeCredential
 from msgraph import GraphServiceClient
@@ -15,20 +23,23 @@ from msgraph.generated.models.drive_item import DriveItem # For type hinting
 from msgraph.generated.models.item_reference import ItemReference # For parent reference
 
 # --- Configuration Loading ---
+# Load configuration from environment variables (which now include .env values)
 CLIENT_ID = os.getenv("RECOVERLETTE_CLIENT_ID")
+# Default to 'consumers' tenant for personal accounts if not specified in .env or shell
 TENANT_ID = os.getenv("RECOVERLETTE_TENANT_ID", "consumers")
 
+# Check if critical configuration is missing
 if not CLIENT_ID:
-    print("Error: Environment variable RECOVERLETTE_CLIENT_ID is not set.", file=sys.stderr)
-    print("Please set this variable with your Azure App Registration Client ID.", file=sys.stderr)
-    sys.exit(1)
+    print("Error: Configuration variable RECOVERLETTE_CLIENT_ID is not set.", file=sys.stderr)
+    print("Please set this variable in a .env file or as an environment variable.", file=sys.stderr)
+    sys.exit(1) # Exit if Client ID is missing
 
-SCOPES = ['Files.ReadWrite']
+SCOPES = ['Files.ReadWrite'] # Sufficient scope
 
 # --- Authentication ---
 async def get_authenticated_client() -> GraphServiceClient | None:
     """Creates and returns an authenticated GraphServiceClient using environment variables."""
-    print(f"Using Client ID: {CLIENT_ID}")
+    print(f"Using Client ID: ***{CLIENT_ID[-4:]}") # Print only last 4 chars for security
     print(f"Using Tenant ID: {TENANT_ID}")
     try:
          credential = DeviceCodeCredential(client_id=CLIENT_ID, tenant_id=TENANT_ID)
@@ -56,14 +67,14 @@ async def get_authenticated_client() -> GraphServiceClient | None:
         print(f"An unexpected error occurred during authentication: {e}", file=sys.stderr)
         return None
 
-# --- Graph Operations ---
+# --- Graph Operations (get_drive_item_details, get_file_content, etc.) ---
+# ... (Keep the async functions from the previous version here) ...
 async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> tuple[str | None, str | None]:
     """Gets the OneDrive item ID and parent folder ID for a given file path."""
     item_id = None
     parent_folder_id = None
     try:
         encoded_file_path = file_path.lstrip('/')
-        # Request 'id' and 'parentReference' which contains the parent driveId and itemId
         drive_item = await client.me.drive.root.get_item(encoded_file_path).get(
             request_configuration=lambda config: config.query_parameters.select = ["id", "parentReference"]
             )
@@ -73,8 +84,6 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
             if drive_item.parent_reference and drive_item.parent_reference.id:
                  parent_folder_id = drive_item.parent_reference.id
             else:
-                 # If parentReference is missing, it might be the root folder
-                 # Let's try getting the root item ID as the parent ID
                  root_item = await client.me.drive.root.get(request_configuration=lambda config: config.query_parameters.select = ["id"])
                  if root_item and root_item.id:
                      parent_folder_id = root_item.id
@@ -83,7 +92,6 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
                  print(f"Found Item ID: {item_id}, Parent Folder ID: {parent_folder_id} for path: {file_path}")
             else:
                  print(f"Found Item ID: {item_id} but could not determine Parent Folder ID for path: {file_path}", file=sys.stderr)
-                 # Proceeding without parent_folder_id will likely fail later uploads
 
         else:
             print(f"Error: Could not retrieve item ID for {file_path}", file=sys.stderr)
@@ -101,7 +109,6 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
 
 async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | None:
     """Downloads file content for a given item ID."""
-    # (Same as previous version)
     try:
         content_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get()
         if content_stream:
@@ -127,7 +134,6 @@ async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | 
 
 def replace_placeholders(content: bytes, company: str, attn_name: str, attn_title: str) -> bytes:
     """Replaces placeholders in the byte content."""
-    # (Same as previous version)
     content = content.replace(b"{{COMPANY}}", company.encode('utf-8'))
     content = content.replace(b"{{ATTN_NAME}}", attn_name.encode('utf-8'))
     content = content.replace(b"{{ATTN_TITLE}}", attn_title.encode('utf-8'))
@@ -137,21 +143,12 @@ async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, fi
     """Uploads content as a new temporary file in the specified parent folder."""
     temp_item_id = None
     try:
-        # Use upload simple for files under 4MB
-        # /me/drive/items/{parent_folder_id}:/{filename}:/content
-        # Note: The by_drive_item_id needs the parent id. Then use :/...:/ to specify child path.
-        # Or use /me/drive/items/{parent_id}/children/{filename}/content (check SDK syntax)
-
-        # Using the children endpoint approach with PUT seems standard
-        # PUT /me/drive/items/{parent-item-id}/children/{filename}/content
         response = await client.me.drive.items.by_drive_item_id(parent_folder_id).children.by_item_path(filename).content.put(content)
-
         if response and response.id:
              temp_item_id = response.id
              print(f"Successfully uploaded temporary file '{filename}' with ID: {temp_item_id}")
         else:
              print(f"Error: Upload response did not contain item ID for '{filename}'.", file=sys.stderr)
-
     except ODataError as o_data_error:
         print(f"Error uploading temporary file '{filename}':", file=sys.stderr)
         if o_data_error.error:
@@ -159,25 +156,20 @@ async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, fi
             print(f"  Message: {o_data_error.error.message}", file=sys.stderr)
     except Exception as e:
         print(f"An unexpected error occurred uploading temporary file '{filename}': {e}", file=sys.stderr)
-
     return temp_item_id
 
 
 async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_path: str) -> bool:
     """Requests PDF conversion for the given item ID and saves the result locally."""
-    # (Same as previous version, but using item_id of the temporary file)
     try:
         print(f"Requesting PDF conversion for item {item_id}...")
         pdf_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get(
             request_configuration=lambda config: config.query_parameters.format = "pdf"
         )
-
         if not pdf_stream:
              print("Error: PDF conversion did not return a content stream.", file=sys.stderr)
              return False
-
         print("Successfully received PDF content stream.")
-        
         try:
             total_bytes = 0
             with open(output_file_path, 'wb') as f:
@@ -185,26 +177,22 @@ async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_
                       if chunk:
                            f.write(chunk)
                            total_bytes += len(chunk)
-
             if total_bytes == 0:
                 print(f"Warning: Saved PDF file '{output_file_path}' is empty (0 bytes). Conversion might have failed silently.", file=sys.stderr)
-            
             print(f"Successfully saved PDF to {output_file_path} ({total_bytes} bytes)")
-            return True # PDF download and save succeeded
-
+            return True
         except IOError as e:
             print(f"Error saving PDF file locally '{output_file_path}': {e}", file=sys.stderr)
-            return False # Local save failed, but download from Graph was ok (don't delete temp file yet?)
-            
+            return False # Indicate local save failed, even if download worked
     except ODataError as o_data_error:
         print(f"Error during PDF conversion/download request for item {item_id}:", file=sys.stderr)
         if o_data_error.error:
             print(f"  Code: {o_data_error.error.code}", file=sys.stderr)
             print(f"  Message: {o_data_error.error.message}", file=sys.stderr)
-        return False # PDF download from Graph failed
+        return False
     except Exception as e:
         print(f"An unexpected error occurred during PDF download for {item_id}: {e}", file=sys.stderr)
-        return False # PDF download from Graph failed
+        return False
 
 
 async def delete_drive_item(client: GraphServiceClient, item_id: str) -> bool:
@@ -247,7 +235,6 @@ async def main(input_onedrive_path: str, company: str, attn_name: str, attn_titl
     print("Replacing placeholders...")
     updated_content = replace_placeholders(original_content, company, attn_name, attn_title)
 
-    # Generate a unique temporary filename in the same folder
     original_path = Path(input_onedrive_path)
     temp_filename = f"{original_path.stem}_temp_{uuid.uuid4().hex}{original_path.suffix}"
     print(f"Generated temporary filename: {temp_filename}")
@@ -257,31 +244,35 @@ async def main(input_onedrive_path: str, company: str, attn_name: str, attn_titl
 
     if not temp_item_id:
         print("Failed to upload temporary file. Exiting.", file=sys.stderr)
-        return # Cannot proceed without the temporary file
+        return
 
     pdf_download_successful = False
+    local_save_successful = False # Track local save status separately
     try:
-        # Add a small delay to allow OneDrive to process the upload before conversion
         print("Waiting briefly before requesting conversion...")
         await asyncio.sleep(5)
 
         print(f"Starting PDF download process for temporary item {temp_item_id}...")
-        pdf_download_successful = await download_as_pdf(client, temp_item_id, output_local_path)
+        # download_as_pdf now returns True only if local save also succeeds
+        local_save_successful = await download_as_pdf(client, temp_item_id, output_local_path)
+        pdf_download_successful = local_save_successful # If save worked, download must have worked
 
     finally:
-        # Attempt to delete the temporary file *if it was created*
-        # Delete regardless of PDF success? Or only if PDF download succeeded?
-        # Let's delete if PDF download from Graph was successful, even if local save failed.
-        # If upload failed (temp_item_id is None), this won't run.
+        # Attempt to delete the temporary file if it was created AND
+        # if the PDF was successfully retrieved from Graph (even if local save failed)
+        # We determine PDF retrieval success by checking local_save_successful OR if download_as_pdf returned false due to Graph error
+        # A simple approach: Delete if the download_as_pdf call didn't fail on the Graph API step.
+        # We only know for sure download succeeded if local_save_successful is True.
+        # Let's delete only if local save succeeded to be cautious.
         if temp_item_id:
-            if pdf_download_successful:
+            if local_save_successful:
                  print(f"Attempting to delete temporary file {temp_item_id}...")
                  await delete_drive_item(client, temp_item_id)
             else:
-                 print(f"Skipping deletion of temporary file {temp_item_id} because PDF download/conversion failed.", file=sys.stderr)
+                 print(f"Skipping deletion of temporary file {temp_item_id} because PDF generation/saving failed.", file=sys.stderr)
 
 
-    if pdf_download_successful:
+    if local_save_successful:
         print("\nCover letter generation complete.")
     else:
         print("\nCover letter generation failed.", file=sys.stderr)
@@ -289,8 +280,8 @@ async def main(input_onedrive_path: str, company: str, attn_name: str, attn_titl
 
 # --- Entry Point ---
 if __name__ == "__main__":
-    # (Argument parsing and output directory creation remain the same as previous version)
     parser = argparse.ArgumentParser(description="Generate a customized cover letter from a OneDrive template and save as local PDF")
+    # --- Arguments --- (Same as before)
     parser.add_argument("-i", "--input", required=True, help="OneDrive path to the input template (.docx) file (e.g., 'Documents/CoverLetterTemplate.docx')")
     parser.add_argument("--company", required=True, help="Company name")
     parser.add_argument("--attn_name", required=True, help="Attention name")
@@ -299,6 +290,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # --- Output Directory Handling --- (Same as before)
     output_dir = os.path.dirname(args.output)
     if output_dir and not os.path.exists(output_dir):
         try:
@@ -311,6 +303,7 @@ if __name__ == "__main__":
     if not args.output.lower().endswith(".pdf"):
          print("Warning: Output file does not end with .pdf", file=sys.stderr)
 
+    # --- Run Main Async Function --- (Same as before)
     try:
         asyncio.run(main(args.input, args.company, args.attn_name, args.attn_title, args.output))
     except KeyboardInterrupt:
@@ -319,4 +312,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nAn unexpected error occurred during execution: {e}", file=sys.stderr)
         sys.exit(1)
-

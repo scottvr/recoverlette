@@ -14,12 +14,13 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
     msgraph-sdk>=1.0.0
     azure-identity>=1.12.0
     requests
+    python-dotenv>=1.0.0 
     ```
     Then run:
     ```bash
     pip install -r requirements.txt
     ```
-    *(Note: `requests` is included primarily as a potential fallback or for future extensions; the core operations now use `msgraph-sdk` and `azure-identity`)*.
+    *(Note: `requests` is included primarily as a potential fallback or for future extensions; the core operations now use `msgraph-sdk`, `azure-identity`, and `python-dotenv`)*.
 
 ## Prerequisites
 
@@ -32,39 +33,25 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
     * Under Redirect URI (optional), select **"Public client/native (mobile & desktop)"** and enter `http://localhost`.
     * Click **Register**.
 * Note down the **Application (client) ID** from the app's overview page.
-* **Configure Authentication:** Go to the `Authentication` section of your app registration. Ensure that under `Platform configurations`, you have the "Mobile and desktop applications" platform added with `http://localhost`. Also, scroll down to `Advanced settings` and ensure **"Allow public client flows"** is enabled (set to Yes).
-* **API Permissions:** Go to `API permissions`. Click `+ Add a permission`, select `Microsoft Graph`, then `Delegated permissions`. Search for and add `Files.ReadWrite`. Ensure this permission has been granted admin consent if required by your organization (though usually not needed for personal accounts and basic delegated permissions).
+* **Configure Authentication:** Navigate to your newly created App registration. Under the **`Manage`** section on the left menu, select **`Authentication`**. Ensure that under `Platform configurations`, you have the "Mobile and desktop applications" platform added with `http://localhost`. Also, scroll down to `Advanced settings` and ensure **"Allow public client flows"** is enabled (set to Yes).
+* **API Permissions:** Under the **`Manage`** section on the left menu, select **`API permissions`**. Click `+ Add a permission`, select `Microsoft Graph`, then `Delegated permissions`. Search for and add `Files.ReadWrite`. Ensure this permission has been granted admin consent if required by your organization (though usually not needed for personal accounts and basic delegated permissions).
 
-### 2. Script Configuration (Environment Variables):
+### 2. Script Configuration (`.env` file):
 
-* The script requires the **Application (client) ID** from your app registration to be set as an environment variable named `RECOVERLETTE_CLIENT_ID`.
-* *(Optional)* You can also set the `RECOVERLETTE_TENANT_ID` environment variable if you need to target a specific tenant (e.g., for work/school accounts). If not set, it defaults to `consumers` for personal Microsoft accounts.
+* The script requires the **Application (client) ID** from your app registration. The recommended way to provide this is via a `.env` file.
+* Create a file named `.env` in the same directory as the `recover.py` script.
+* Add the following line to the `.env` file, replacing the placeholder with your actual Client ID:
+    ```
+    RECOVERLETTE_CLIENT_ID=your-client-id-here
+    ```
+* *(Optional)* You can also set the `RECOVERLETTE_TENANT_ID` in the `.env` file if you need to target a specific tenant (e.g., for work/school accounts). If not set, it defaults to `consumers` for personal Microsoft accounts. Add this line if needed:
+    ```
+    # Optional: Set if not using 'consumers' tenant
+    # RECOVERLETTE_TENANT_ID=your-tenant-id-here 
+    ```
+* **Important:** Ensure the `.env` file is included in your `.gitignore` if you are using version control, to avoid accidentally committing your Client ID.
 
-    **How to set environment variables:**
-
-    * **Linux/macOS (bash/zsh):**
-        ```bash
-        export RECOVERLETTE_CLIENT_ID="your-client-id-here"
-        # Optional: export RECOVERLETTE_TENANT_ID="your-tenant-id-here"
-        python recover.py ...
-        ```
-        *(Note: `export` sets it for the current shell session only. Add it to your `.bashrc`, `.zshrc`, or `.profile` for persistence).*
-
-    * **Windows (Command Prompt):**
-        ```cmd
-        set RECOVERLETTE_CLIENT_ID=your-client-id-here
-        :: Optional: set RECOVERLETTE_TENANT_ID=your-tenant-id-here
-        python recover.py ...
-        ```
-        *(Note: `set` only applies to the current cmd session).*
-
-    * **Windows (PowerShell):**
-        ```powershell
-        $env:RECOVERLETTE_CLIENT_ID = "your-client-id-here"
-        # Optional: $env:RECOVERLETTE_TENANT_ID = "your-tenant-id-here"
-        python recover.py ...
-        ```
-        *(Note: This only applies to the current PowerShell session).*
+* **Alternative (Overrides .env):** You can still set `RECOVERLETTE_CLIENT_ID` and `RECOVERLETTE_TENANT_ID` as regular environment variables in your shell. If set, these shell variables will take precedence over the values in the `.env` file.
 
 ### 3. Template Preparation:
 
@@ -73,7 +60,7 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 
 ## Authentication Flow
 
-This script uses the `DeviceCodeCredential` from the `azure-identity` library. When you run it for the first time (or after credentials expire):
+This script uses the `DeviceCodeCredential` from the `azure-identity` library. When you run it for the first time (or after credentials expire / cache is cleared):
 
 1.  It will print a message like: `To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code XXXXXXXXX to authenticate.`
 2.  Copy the code (e.g., `XXXXXXXXX`).
@@ -110,21 +97,22 @@ options:
 **Example:**
 
 ```bash
-# Ensure RECOVERLETTE_CLIENT_ID is set first!
+# Ensure .env file exists with RECOVERLETTE_CLIENT_ID set!
 python recover.py -i "JobApps/Templates/StandardCoverLetter.docx" --company "Example Corp" --attn_name "Jane Doe" --attn_title "Hiring Manager" -o "ExampleCorp_CoverLetter.pdf"
 ```
 
 ## Workflow
 
 The script now performs the following steps:
-1.  Authenticates the user using the device code flow.
-2.  Downloads the original template content from the OneDrive path specified by `-i`.
-3.  Replaces the placeholders (`{{COMPANY}}`, `{{ATTN_NAME}}`, `{{ATTN_TITLE}}`) in the content locally.
-4.  Uploads this modified content as a **new temporary file** to the same folder in OneDrive (with a unique name like `original_temp_uuid.docx`).
-5.  Requests Microsoft Graph to convert this **temporary file** to PDF format.
-6.  Downloads the resulting PDF content stream.
-7.  Saves the PDF content locally to the path specified by `-o`.
-8.  If the PDF download was successful, it **deletes the temporary file** from OneDrive.
+1.  Loads configuration from the `.env` file and environment variables.
+2.  Authenticates the user using the device code flow.
+3.  Downloads the original template content from the OneDrive path specified by `-i`.
+4.  Replaces the placeholders (`{{COMPANY}}`, `{{ATTN_NAME}}`, `{{ATTN_TITLE}}`) in the content locally.
+5.  Uploads this modified content as a **new temporary file** to the same folder in OneDrive (with a unique name like `original_temp_uuid.docx`).
+6.  Requests Microsoft Graph to convert this **temporary file** to PDF format.
+7.  Downloads the resulting PDF content stream.
+8.  Saves the PDF content locally to the path specified by `-o`.
+9.  If the PDF download and local save were successful, it **deletes the temporary file** from OneDrive.
 
 This ensures your original template file remains untouched.
 
@@ -140,4 +128,4 @@ This ensures your original template file remains untouched.
 * **Local File Support:** Add options to use local `.docx` files as input/output directly.
 * **Font/Style Modification:** Explore options to modify text formatting (font, size, color) if possible via Graph API or document manipulation before upload.
 * **Alternative Auth Flows:** Support other credential types from `azure-identity` if needed (e.g., `InteractiveBrowserCredential`).
-* **Configuration File:** Consider using a configuration file (e.g., `.env`) instead of only environment variables for settings like `CLIENT_ID`.
+
