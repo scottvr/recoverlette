@@ -19,10 +19,10 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 
 ### 1. Azure App Registration for Microsoft Graph API Access:
 
-* Register an application in the Microsoft Entra admin center (formerly Azure portal).
+* Register an application in the Microsoft Entra admin center.
 * Note down the **Application (client) ID**.
 * Configure **Authentication**: Add "Mobile and desktop applications" platform with `http://localhost` redirect URI, and enable "Allow public client flows".
-* Configure **API Permissions**: Add `Microsoft Graph` -> `Delegated permissions` -> `Files.ReadWrite` and `User.Read`. Ensure admin consent is granted if needed (usually not for these delegated permissions on personal accounts).
+* Configure **API Permissions**: Add `Microsoft Graph` -> `Delegated permissions` -> `Files.ReadWrite` and `User.Read`.
 
 *(See previous README versions for detailed steps if needed).*
 
@@ -37,21 +37,17 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 
 * Create `.docx` template in OneDrive.
 * Use `{{PLACEHOLDER_KEY}}` for replacements.
-* Use `{{ADDL_OptionalKey}}` for placeholders to ignore warnings if undefined.
+* **Handling Undefined Placeholders:**
+    * If a placeholder like `{{NormalKey}}` is found in the template but not defined via a `-D` argument, a warning will be printed, and the placeholder will remain unchanged in the output PDF.
+    * If a placeholder starts with `ADDL_` (e.g., `{{ADDL_OptionalInfo}}`) and it is *not* defined via a `-D` argument, it will be silently **removed** (replaced with an empty string) from the document before PDF conversion. This is useful for optional paragraphs or sections.
 
 ## Authentication Flow & Token Caching
 
-* This script uses the `DeviceCodeCredential` from `azure-identity` **with persistent token caching enabled**.
-* **First Run & Consent:** When you run the script for the *very first time*, or after the app's requested permissions change (e.g., adding `User.Read`), the authentication process will require you to grant consent.
-    1.  You will be prompted in the console to go to `https://microsoft.com/devicelogin` and enter a code.
-    2.  After entering the code and signing in, you will likely see a screen asking you to **accept the permissions** requested by the application (e.g., "Read your profile", "Read and write your files").
-    3.  You must accept these permissions for the application to work. This consent is typically stored by Microsoft, so you shouldn't need to grant permissions again on subsequent runs unless the requested scopes change.
-* **Subsequent Runs:** After the initial consent, the script will attempt to silently use the cached token. You should *not* need to authenticate via the browser again unless the cached token/refresh token expires or becomes invalid.
-* The cache is stored securely using OS-level protection (via the `msal-extensions` library).
+* Uses `InteractiveBrowserCredential` with persistent token caching.
+* **First Run & Consent:** Requires browser interaction for login and to grant application permissions (e.g., "Read your profile", "Read and write your files"). This consent is typically a one-time step.
+* **Subsequent Runs:** Uses the cached token silently until it expires.
 
 ## Usage
-
-The script runs asynchronously using Python's `asyncio`.
 
 ```bash
 python recover.py -h
@@ -81,39 +77,43 @@ options:
 **Example:**
 
 ```bash
-# Run with verbose logging
-python recover.py -v -i "JobApps/Templates/CoverLetter.docx" -o "Output/MyCompanyLetter.pdf" -D COMPANY="My Company" -D PositionTitle="Analyst"
+# Assuming template contains {{COMPANY}}, {{PositionTitle}}, {{ADDL_OptionalBlurb}}
+# Defines COMPANY and PositionTitle, leaves ADDL_OptionalBlurb undefined (it will be removed).
+python recover.py -v -i "MyDocs/Template.docx" \
+                  -o "Output/FinalDoc.pdf" \
+                  -D COMPANY="ACME Corp" \
+                  -D PositionTitle="Technician" 
 ```
 
 ## Workflow
 
 1.  Loads config (`.env`).
-2.  Authenticates the user (device code or cache, may require one-time consent).
-3.  Downloads the original template (`-i`).
-4.  Scans the template for placeholders.
-5.  Warns about undefined (non-`ADDL_`) placeholders.
-6.  Replaces defined placeholders (`-D`).
-7.  Uploads modified content as a temporary file in OneDrive.
-8.  Converts temporary file to PDF via Graph API.
-9.  Downloads the PDF.
-10. Saves PDF locally (`-o`).
-11. If successful, deletes the temporary file from OneDrive.
+2.  Authenticates (interactive or cache).
+3.  Downloads original template (`-i`).
+4.  Scans template for placeholders.
+5.  Identifies defined keys (`-D`), undefined `ADDL_` keys (for removal), and other undefined keys (for warning).
+6.  Warns about undefined (non-`ADDL_`) placeholders.
+7.  Replaces defined placeholders with values and removes undefined `ADDL_` placeholders using `python-docx`.
+8.  Uploads modified content as a temporary file.
+9.  Converts temporary file to PDF via Graph API (using manual URL workaround).
+10. Downloads PDF.
+11. Saves PDF locally (`-o`).
+12. If successful, deletes temporary file.
 
 ## Troubleshooting
 
-* **Stuck after authentication / 400 Errors:** If the console seems to hang after browser authentication or logs show 400 errors during polling, ensure you have completed the **consent step** in the browser the first time you run the app or after permissions change. Try clearing the token cache (`recoverlette_cache` file) and running again. Use the `-v` flag for detailed logs.
-* **Import Errors:** Ensure all dependencies in `requirements.txt` are installed (`pip install -r requirements.txt`).
-* **Permissions Errors:** Check API permissions in Azure App Registration match required scopes (`Files.ReadWrite`, `User.Read`).
-* **Cache Issues:** Locate and delete the cache file (`recoverlette_cache`) to force a fresh login if caching seems broken.
+* **Stuck after authentication / Errors:** Use `-v` flag. Check logs for specific errors. Ensure initial consent was given. Clear token cache (`recoverlette_cache` file) if needed. Check App Registration settings and `.env` file.
+* **Placeholders Not Replaced/Removed:** Ensure placeholders in the `.docx` file exactly match `{{KEY}}` format. Check verbose logs (`-v`) for details during the "Performing replacements" step. Note that complex formatting within a placeholder might interfere with simple text replacement.
+* **PDF Output is DOCX:** Check verbose logs (`-v`). Ensure the manual URL constructed in `download_as_pdf` includes `?format=pdf`. Verify the `requests` library is correctly handling the 302 redirect and downloading from the `Location` header. Check the size of the final PDF - very small files might indicate an error page was converted.
 
 ## TODO
 
 ### High Priority / Next
-* **Error Handling:** Improve error handling (e.g., temporary file deletion failures, empty PDF checks, token cache errors).
-* **User Confirmation:** Optionally add a prompt asking the user to confirm proceeding if undefined placeholders are found.
+* **Error Handling:** Improve robustness (e.g., temporary file deletion failures, empty PDF checks, token cache errors, docx parsing errors).
+* **User Confirmation:** Optionally prompt user to continue if undefined (non-`ADDL_`) placeholders are found.
 
 ### Lower Priority / Future Ideas
 * **File Locations:** Improve handling of OneDrive paths.
 * **Local File Support:** Add options for local `.docx` input/output.
-* **Font/Style Modification:** Explore options for formatting.
-* **Alternative Auth Flows:** Support `InteractiveBrowserCredential` etc. (Note: Caching works similarly, consent still required initially).
+* **Font/Style Modification:** Explore options for formatting (simple replacement might lose formatting).
+* **Alternative Auth Flows:** Support `DeviceCodeCredential` if underlying issues are resolved in libraries.
