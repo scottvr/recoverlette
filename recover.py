@@ -6,19 +6,29 @@ import requests # Still potentially useful for fallback
 import sys
 import uuid # For generating unique temporary filenames
 from pathlib import Path # For path manipulation
-import re # For parsing -D arguments, though not for docx replacement itself
+import re # Now used for finding placeholders
+import io # For reading docx from bytes
 
 # --- Load .env file ---
 from dotenv import load_dotenv
 load_dotenv()
 # --- End Load .env file ---
 
+# --- Add python-docx dependency ---
+try:
+    import docx # For parsing template to find placeholders
+except ImportError:
+    print("Error: The 'python-docx' library is required for scanning templates.", file=sys.stderr)
+    print("Please install it using: pip install python-docx", file=sys.stderr)
+    sys.exit(1)
+# --- End python-docx dependency ---
+
 # Authentication & SDK Core
 from azure.identity.aio import DeviceCodeCredential
 from msgraph import GraphServiceClient
 from msgraph.generated.models.o_data_errors.o_data_error import ODataError
-from msgraph.generated.models.drive_item import DriveItem # For type hinting
-from msgraph.generated.models.item_reference import ItemReference # For parent reference
+from msgraph.generated.models.drive_item import DriveItem
+from msgraph.generated.models.item_reference import ItemReference
 
 # --- Configuration Loading ---
 CLIENT_ID = os.getenv("RECOVERLETTE_CLIENT_ID")
@@ -34,12 +44,14 @@ SCOPES = ['Files.ReadWrite']
 # --- Helper Class for Argument Parsing ---
 class DefineAction(argparse.Action):
     """Custom action to parse KEY=VALUE pairs for definitions."""
+    # (Same as previous version)
     def __call__(self, parser, namespace, values, option_string=None):
         definitions = getattr(namespace, self.dest, {}) or {}
         for value_pair in values:
             if '=' not in value_pair:
                 raise argparse.ArgumentError(self, f"Invalid definition format: '{value_pair}'. Use KEY=VALUE.")
             key, value = value_pair.split('=', 1)
+            # Strip whitespace from key and value
             definitions[key.strip()] = value.strip()
         setattr(namespace, self.dest, definitions)
 
@@ -54,7 +66,6 @@ async def get_authenticated_client() -> GraphServiceClient | None:
     except Exception as e:
          print(f"Error creating credential object: {e}", file=sys.stderr)
          return None
-
     client = GraphServiceClient(credentials=credential, scopes=SCOPES)
     print("GraphServiceClient created. Attempting authentication...")
     try:
@@ -74,6 +85,41 @@ async def get_authenticated_client() -> GraphServiceClient | None:
     except Exception as e:
         print(f"An unexpected error occurred during authentication: {e}", file=sys.stderr)
         return None
+
+# --- Placeholder Discovery (New Function) ---
+def find_placeholders_in_docx(content_bytes: bytes) -> set[str]:
+    """
+    Uses python-docx to find all unique placeholder keys {{KEY}} in the document content.
+    """
+    found_keys = set()
+    placeholder_pattern = re.compile(r"\{\{(.*?)\}\}") # Find {{KEY}}
+    
+    try:
+        # Load the docx content from bytes into an in-memory stream
+        doc_stream = io.BytesIO(content_bytes)
+        document = docx.Document(doc_stream)
+
+        # Check paragraphs
+        for para in document.paragraphs:
+            for match in placeholder_pattern.findall(para.text):
+                found_keys.add(match.strip()) # Add the key inside braces, stripped
+
+        # Check tables
+        for table in document.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    # Check text directly within cells (treat cell as paragraphs)
+                    for para in cell.paragraphs:
+                         for match in placeholder_pattern.findall(para.text):
+                             found_keys.add(match.strip())
+                             
+    except Exception as e:
+        print(f"\nWarning: Error parsing DOCX template to find placeholders: {e}", file=sys.stderr)
+        print("         Placeholder reporting might be incomplete.", file=sys.stderr)
+        # Return empty set or re-raise? Let's return empty for now to allow attempt to proceed.
+        return set()
+        
+    return found_keys
 
 # --- Graph Operations ---
 async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> tuple[str | None, str | None]:
@@ -137,33 +183,27 @@ async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | 
 
 # --- Placeholder Replacement ---
 def replace_placeholders(content: bytes, replacements: dict[str, str]) -> bytes:
-    """Replaces placeholders defined in the replacements dict in the byte content."""
+    """Replaces placeholders using byte replacement based on the dictionary."""
+    # (Same as previous version - uses byte replace, doesn't rely on docx parsing)
     if not replacements:
-        print("No replacements defined.")
+        print("No replacement values provided via -D arguments.")
         return content
         
-    print("Replacing placeholders...")
+    print("Performing replacements based on -D arguments...")
     current_content = content
     for key, value in replacements.items():
-        # Construct the placeholder string like {{KEY}}
         placeholder = f"{{{{{key}}}}}".encode('utf-8')
         replacement_value = value.encode('utf-8')
-        
-        # Perform byte replacement
-        # Count occurrences before replacing to report changes
         count_before = current_content.count(placeholder)
         if count_before > 0:
             current_content = current_content.replace(placeholder, replacement_value)
-            print(f"  - Replaced '{placeholder.decode('utf-8')}' with '{value}' ({count_before} occurrence(s))")
-        else:
-             print(f"  - Placeholder '{{{{{key}}}}}' not found in template.")
-             
+            # Only report if replacement happened, scan function reports presence
+            # print(f"  - Replaced '{placeholder.decode('utf-8')}' with '{value}' ({count_before} occurrence(s))")
     return current_content
 
 # --- File Upload/Download/Delete Operations ---
+# (upload_temp_file, download_as_pdf, delete_drive_item are same as previous version)
 async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, filename: str, content: bytes) -> str | None:
-    """Uploads content as a new temporary file."""
-    # (Same as previous version)
     temp_item_id = None
     try:
         response = await client.me.drive.items.by_drive_item_id(parent_folder_id).children.by_item_path(filename).content.put(content)
@@ -182,8 +222,6 @@ async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, fi
     return temp_item_id
 
 async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_path: str) -> bool:
-    """Requests PDF conversion and saves the result locally."""
-    # (Same as previous version)
     try:
         print(f"Requesting PDF conversion for item {item_id}...")
         pdf_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get(
@@ -218,8 +256,6 @@ async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_
         return False
 
 async def delete_drive_item(client: GraphServiceClient, item_id: str) -> bool:
-    """Deletes a DriveItem by its ID."""
-    # (Same as previous version)
     try:
         await client.me.drive.items.by_drive_item_id(item_id).delete()
         print(f"Successfully deleted temporary item {item_id}.")
@@ -234,9 +270,10 @@ async def delete_drive_item(client: GraphServiceClient, item_id: str) -> bool:
         print(f"An unexpected error occurred deleting item {item_id}: {e}", file=sys.stderr)
         return False
 
-# --- Main Workflow ---
+
+# --- Main Workflow (Modified) ---
 async def main(input_onedrive_path: str, output_local_path: str, definitions: dict[str, str]):
-    """Main async workflow using temporary file approach and generic replacements."""
+    """Main async workflow with placeholder scanning and temporary file."""
     
     client = await get_authenticated_client()
     if not client:
@@ -255,7 +292,38 @@ async def main(input_onedrive_path: str, output_local_path: str, definitions: di
         print("Failed to retrieve template content or content is empty. Exiting.", file=sys.stderr)
         return
 
+    # --- Scan for placeholders ---
+    print("Scanning template for placeholders {{...}}...")
+    found_placeholders = find_placeholders_in_docx(original_content)
+    if found_placeholders:
+         print(f"Found placeholders: {', '.join(sorted(list(found_placeholders)))}")
+         defined_keys = set(definitions.keys())
+         undefined_placeholders = found_placeholders - defined_keys
+         
+         # Filter out ADDL_ prefixes and report others
+         reportable_undefined = {
+             ph for ph in undefined_placeholders if not ph.startswith("ADDL_")
+         }
+         
+         if reportable_undefined:
+             print("\n--- WARNING: Undefined Placeholders Found ---", file=sys.stderr)
+             print("The following placeholders were found in the template but were not defined using -D:", file=sys.stderr)
+             for ph in sorted(list(reportable_undefined)):
+                 print(f"  - {{ {{{ph}}} }}", file=sys.stderr)
+             print("These placeholders will remain unchanged in the output PDF.", file=sys.stderr)
+             print("--------------------------------------------\n")
+             # Optional: Add a confirmation prompt here to continue or exit
+             # For now, we just warn and proceed.
+         else:
+              print("All found non-ADDL_ placeholders have definitions provided via -D.")
+              
+    else:
+        print("No placeholders like {{...}} found in the template (or parsing failed).")
+    # --- End Scan ---
+
+
     # Replace placeholders using the dictionary from command line args
+    # This still uses byte replacement for safety/simplicity
     updated_content = replace_placeholders(original_content, definitions)
 
     original_path = Path(input_onedrive_path)
@@ -281,7 +349,7 @@ async def main(input_onedrive_path: str, output_local_path: str, definitions: di
 
     finally:
         if temp_item_id:
-            if local_save_successful: # Only delete if PDF was generated AND saved locally
+            if local_save_successful:
                  print(f"Attempting to delete temporary file {temp_item_id}...")
                  await delete_drive_item(client, temp_item_id)
             else:
@@ -294,12 +362,13 @@ async def main(input_onedrive_path: str, output_local_path: str, definitions: di
         print("\nCover letter generation failed.", file=sys.stderr)
 
 
-# --- Entry Point (Modified) ---
+# --- Entry Point ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Generate a customized cover letter from a OneDrive template and save as local PDF.",
         formatter_class=argparse.RawTextHelpFormatter # Preserve formatting in help
         )
+    # (Arguments remain the same)
     parser.add_argument(
         "-i", "--input", 
         required=True, 
@@ -313,10 +382,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-D", "--define",
         metavar="KEY=VALUE",
-        nargs='+', # Accept one or more KEY=VALUE pairs
-        action=DefineAction, # Use custom action to build dictionary
-        dest='definitions', # Store result in args.definitions
-        default={}, # Default to empty dict if no -D args
+        nargs='+',
+        action=DefineAction,
+        dest='definitions',
+        default={},
         help="Define placeholder replacements. Use the format KEY=VALUE.\n"
              "The script will replace occurrences of {{KEY}} in the template with VALUE.\n"
              "Multiple -D arguments can be provided, or multiple KEY=VALUE pairs after one -D.\n"
@@ -340,7 +409,6 @@ if __name__ == "__main__":
 
     # --- Run Main Async Function ---
     try:
-        # Pass the definitions dictionary to main
         asyncio.run(main(args.input, args.output, args.definitions))
     except KeyboardInterrupt:
          print("\nOperation cancelled by user.", file=sys.stderr)
@@ -348,4 +416,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nAn unexpected error occurred during execution: {e}", file=sys.stderr)
         sys.exit(1)
-
