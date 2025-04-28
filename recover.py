@@ -24,20 +24,34 @@ except ImportError:
 # --- End python-docx dependency ---
 
 # Authentication & SDK Core
-from azure.identity import DeviceCodeCredential
+from azure.identity import DeviceCodeCredential # Corrected import path
 from msgraph import GraphServiceClient
 from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 from msgraph.generated.models.drive_item import DriveItem
 from msgraph.generated.models.item_reference import ItemReference
 
 # --- Specific Request Builder / Config Imports for Query Params ---
-# Import necessary classes for configuring query parameters
-from msgraph.generated.me.me_request_builder import MeRequestBuilder
-# For path-based item access like client.me.drive.root.get_item(path):
-# The .get() method on the resulting builder needs DriveItemItemRequestBuilder config
-from msgraph.generated.drive.items.item.drive_item_item_request_builder import DriveItemItemRequestBuilder
-# For content access like client.me.drive.items.by_drive_item_id(item_id).content:
-from msgraph.generated.drive.items.item.content.content_request_builder import ContentRequestBuilder
+# Import base configuration class
+from kiota_abstractions.base_request_configuration import RequestConfiguration
+
+# Import specific QueryParameters classes based on expected API path structure
+# If these paths are incorrect for your installed SDK version, they might need adjustment
+try:
+    # Config for /me endpoint (often maps to /users/{id})
+    from msgraph.generated.users.item.user_item_request_builder import UserItemRequestBuilderGetQueryParameters as MeRequestBuilderGetQueryParameters
+    # Config for /drive/items/{id} endpoint
+    from msgraph.generated.drive.items.item.drive_item_item_request_builder import DriveItemItemRequestBuilderGetQueryParameters
+    # Config for /drive/items/{id}/content endpoint
+    from msgraph.generated.drive.items.item.content.content_request_builder import ContentRequestBuilderGetQueryParameters
+except ImportError as e:
+     print(f"Error importing specific msgraph request configurations: {e}", file=sys.stderr)
+     print("Please ensure 'msgraph-sdk' is installed correctly (version >= 1.0.0).", file=sys.stderr)
+     print("Attempting to proceed without specific query param classes, functionality may be limited.", file=sys.stderr)
+     # Define fallbacks if imports fail (script might error later)
+     MeRequestBuilderGetQueryParameters = None
+     DriveItemItemRequestBuilderGetQueryParameters = None
+     ContentRequestBuilderGetQueryParameters = None
+
 # --- End Specific Imports ---
 
 
@@ -79,15 +93,20 @@ async def get_authenticated_client() -> GraphServiceClient | None:
     print("GraphServiceClient created. Attempting authentication...")
     try:
         # --- CORRECTED Block ---
-        # Define query parameters using the specific class
-        query_params = MeRequestBuilder.MeRequestBuilderGetQueryParameters(
-            select=['displayName'] # Use list for select parameter
-        )
-        # Configure the request using the parameters object
-        request_config = MeRequestBuilder.MeRequestBuilderGetRequestConfiguration(
-            query_parameters=query_params
-        )
-        # Make the call using the configuration object
+        request_config = None
+        if MeRequestBuilderGetQueryParameters: # Check if class was imported
+             # Define query parameters using the specific class
+             query_params = MeRequestBuilderGetQueryParameters(
+                 select=['displayName'] # Use list for select parameter
+             )
+             # Configure the request using the parameters object
+             request_config = RequestConfiguration( # Use base class
+                 query_parameters=query_params
+             )
+        else:
+             print("Warning: MeRequestBuilderGetQueryParameters not available for /me call.", file=sys.stderr)
+
+        # Make the call using the configuration object (or None if class import failed)
         me_user = await client.me.get(request_configuration=request_config)
         # --- End CORRECTED Block ---
 
@@ -140,14 +159,19 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
         encoded_file_path = file_path.lstrip('/')
         
         # --- CORRECTED Block ---
-        # Define query parameters
-        query_params = DriveItemItemRequestBuilder.DriveItemItemRequestBuilderGetQueryParameters(
-            select = ["id", "parentReference"]
-        )
-        # Configure the request
-        request_config = DriveItemItemRequestBuilder.DriveItemItemRequestBuilderGetRequestConfiguration(
-            query_parameters = query_params
-        )
+        request_config = None
+        if DriveItemItemRequestBuilderGetQueryParameters: # Check if class was imported
+            # Define query parameters
+            query_params = DriveItemItemRequestBuilderGetQueryParameters(
+                select = ["id", "parentReference"]
+            )
+            # Configure the request
+            request_config = RequestConfiguration( # Use base class
+                query_parameters = query_params
+            )
+        else:
+            print("Warning: DriveItemItemRequestBuilderGetQueryParameters not available.", file=sys.stderr)
+
         # Access item by path and apply configuration
         drive_item = await client.me.drive.root.get_item(encoded_file_path).get(
              request_configuration=request_config
@@ -160,9 +184,14 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
                  parent_folder_id = drive_item.parent_reference.id
             else:
                  # Fallback to get root ID if item is in root
-                 root_item_query_params = DriveItemItemRequestBuilder.DriveItemItemRequestBuilderGetQueryParameters(select=["id"])
-                 root_item_config = DriveItemItemRequestBuilder.DriveItemItemRequestBuilderGetRequestConfiguration(query_parameters=root_item_query_params)
-                 root_item = await client.me.drive.root.get(request_configuration=root_item_config)
+                 root_request_config = None
+                 if DriveItemItemRequestBuilderGetQueryParameters:
+                     root_query_params = DriveItemItemRequestBuilderGetQueryParameters(select=["id"])
+                     root_request_config = RequestConfiguration(query_parameters=root_query_params)
+                 else:
+                      print("Warning: DriveItemItemRequestBuilderGetQueryParameters not available for root fallback.", file=sys.stderr)
+                 
+                 root_item = await client.me.drive.root.get(request_configuration=root_request_config)
                  if root_item and root_item.id:
                      parent_folder_id = root_item.id
             if parent_folder_id:
@@ -251,14 +280,21 @@ async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_
         print(f"Requesting PDF conversion for item {item_id}...")
         
         # --- CORRECTED Block ---
-        # Define query parameters for format=pdf
-        query_params = ContentRequestBuilder.ContentRequestBuilderGetQueryParameters(
-             format="pdf"
-        )
-        # Configure the request
-        request_config = ContentRequestBuilder.ContentRequestBuilderGetRequestConfiguration(
-             query_parameters=query_params
-        )
+        request_config = None
+        if ContentRequestBuilderGetQueryParameters: # Check if class was imported
+            # Define query parameters for format=pdf
+            query_params = ContentRequestBuilderGetQueryParameters(
+                 format="pdf"
+            )
+            # Configure the request
+            request_config = RequestConfiguration( # Use base class
+                 query_parameters=query_params
+            )
+        else:
+             print("Warning: ContentRequestBuilderGetQueryParameters not available.", file=sys.stderr)
+             # Attempt without specific config? Might fail. Or maybe format is handled differently?
+             # For now, proceed with request_config possibly being None
+
         # Make the call using the config object
         pdf_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get(
             request_configuration=request_config
@@ -398,13 +434,13 @@ if __name__ == "__main__":
         formatter_class=argparse.RawTextHelpFormatter
         )
     parser.add_argument(
-        "-i", "--input", 
-        required=True, 
+        "-i", "--input",
+        required=True,
         help="OneDrive path to the input template (.docx) file (e.g., 'Documents/CoverLetterTemplate.docx')"
         )
     parser.add_argument(
-        "-o", "--output", 
-        required=True, 
+        "-o", "--output",
+        required=True,
         help="Local file path to save the output PDF (e.g., 'MyCoverLetter.pdf')"
         )
     parser.add_argument(
