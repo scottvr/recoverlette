@@ -24,7 +24,8 @@ except ImportError:
 # --- End python-docx dependency ---
 
 # Authentication & SDK Core
-from azure.identity import DeviceCodeCredential # Corrected import path
+# Import DeviceCodeCredential and TokenCachePersistenceOptions
+from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions
 from msgraph import GraphServiceClient
 from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 # Models used directly are still imported
@@ -32,11 +33,9 @@ from msgraph.generated.models.drive_item import DriveItem
 from msgraph.generated.models.item_reference import ItemReference
 
 # --- Specific Request Builder / Config Imports ---
-# Import ONLY the base configuration class
+# Import base configuration class
 from kiota_abstractions.base_request_configuration import RequestConfiguration
-# REMOVED attempts to import specific ...GetQueryParameters classes
-# --- End Specific Imports ---
-
+# We will configure query params directly using dicts within RequestConfiguration
 
 # --- Configuration Loading ---
 CLIENT_ID = os.getenv("RECOVERLETTE_CLIENT_ID")
@@ -61,28 +60,40 @@ class DefineAction(argparse.Action):
             definitions[key.strip()] = value.strip()
         setattr(namespace, self.dest, definitions)
 
-# --- Authentication ---
+# --- Authentication (Modified for Caching) ---
 async def get_authenticated_client() -> GraphServiceClient | None:
-    """Creates and returns an authenticated GraphServiceClient."""
+    """Creates and returns an authenticated GraphServiceClient with persistent token caching."""
     print(f"Using Client ID: ***{CLIENT_ID[-4:]}")
     print(f"Using Tenant ID: {TENANT_ID}")
+
+    # --- Token Cache Configuration ---
+    # Define persistence options. Uses msal-extensions for secure cross-platform storage.
+    # Name ensures cache isolation. allow_unencrypted_storage=False (default) is more secure.
+    cache_options = TokenCachePersistenceOptions(name="recoverlette_cache")
+    # --- End Token Cache Configuration ---
+
     try:
-         credential = DeviceCodeCredential(client_id=CLIENT_ID, tenant_id=TENANT_ID)
+         # Pass cache options to the credential constructor
+         credential = DeviceCodeCredential(
+             client_id=CLIENT_ID,
+             tenant_id=TENANT_ID,
+             cache_persistence_options=cache_options # Enable persistent cache
+             )
+         print("Token cache enabled.")
     except Exception as e:
-         print(f"Error creating credential object: {e}", file=sys.stderr)
+         print(f"Error creating credential object (cache setup might need 'msal-extensions'): {e}", file=sys.stderr)
          return None
 
     client = GraphServiceClient(credentials=credential, scopes=SCOPES)
-    print("GraphServiceClient created. Attempting authentication...")
+    print("GraphServiceClient created. Attempting authentication (will use cache if possible)...")
     try:
-        # --- CORRECTED Block using dict ---
         # Configure query parameters directly using a dictionary
         request_config = RequestConfiguration(
             query_parameters = {'select': ['displayName']} # Pass params as dict
         )
         # Make the call using the configuration object
+        # This call will trigger device code flow only if needed (no valid cached token)
         me_user = await client.me.get(request_configuration=request_config)
-        # --- End CORRECTED Block ---
 
         if me_user and me_user.display_name:
              print(f"Authentication successful for user: {me_user.display_name}")
@@ -91,13 +102,15 @@ async def get_authenticated_client() -> GraphServiceClient | None:
              print("Authentication successful, but couldn't retrieve user display name.")
              return client
     except ODataError as o_data_error:
+        # If auth fails even with caching attempt, report it
         print(f"Authentication or initial Graph call failed:", file=sys.stderr)
         if o_data_error.error:
             print(f"  Code: {o_data_error.error.code}", file=sys.stderr)
             print(f"  Message: {o_data_error.error.message}", file=sys.stderr)
         return None
     except Exception as e:
-        print(f"An unexpected error occurred during authentication: {e}", file=sys.stderr)
+        # Catch other potential exceptions (e.g., during cached token validation)
+        print(f"An unexpected error occurred during authentication/Graph call: {e}", file=sys.stderr)
         return None
 
 # --- Placeholder Discovery ---
@@ -125,30 +138,25 @@ def find_placeholders_in_docx(content_bytes: bytes) -> set[str]:
     return found_keys
 
 # --- Graph Operations ---
+# (get_drive_item_details, get_file_content, replace_placeholders,
+#  upload_temp_file, download_as_pdf, delete_drive_item remain the same
+#  as the previous version - using RequestConfiguration with dicts)
 async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> tuple[str | None, str | None]:
-    """Gets the OneDrive item ID and parent folder ID."""
     item_id = None
     parent_folder_id = None
     try:
         encoded_file_path = file_path.lstrip('/')
-        
-        # --- CORRECTED Block using dict ---
-        # Configure query parameters directly using a dictionary
         request_config = RequestConfiguration(
-            query_parameters = {'select': ["id", "parentReference"]} # Pass params as dict
+            query_parameters = {'select': ["id", "parentReference"]}
         )
-        # Access item by path and apply configuration
         drive_item = await client.me.drive.root.get_item(encoded_file_path).get(
              request_configuration=request_config
         )
-        # --- End CORRECTED Block ---
-
         if drive_item and drive_item.id:
             item_id = drive_item.id
             if drive_item.parent_reference and drive_item.parent_reference.id:
                  parent_folder_id = drive_item.parent_reference.id
             else:
-                 # Fallback to get root ID if item is in root
                  root_request_config = RequestConfiguration(query_parameters={'select': ["id"]})
                  root_item = await client.me.drive.root.get(request_configuration=root_request_config)
                  if root_item and root_item.id:
@@ -159,7 +167,6 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
                  print(f"Found Item ID: {item_id} but could not determine Parent Folder ID for path: {file_path}", file=sys.stderr)
         else:
             print(f"Error: Could not retrieve item ID for {file_path}", file=sys.stderr)
-
     except ODataError as o_data_error:
         print(f"Error getting item details for {file_path}:", file=sys.stderr)
         if o_data_error.error:
@@ -170,8 +177,6 @@ async def get_drive_item_details(client: GraphServiceClient, file_path: str) -> 
     return item_id, parent_folder_id
 
 async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | None:
-    """Downloads file content for a given item ID."""
-    # (No config needed here, same as previous version)
     try:
         content_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get()
         if content_stream:
@@ -195,10 +200,7 @@ async def get_file_content(client: GraphServiceClient, item_id: str) -> bytes | 
         print(f"An unexpected error occurred downloading content for {item_id}: {e}", file=sys.stderr)
         return None
 
-# --- Placeholder Replacement ---
 def replace_placeholders(content: bytes, replacements: dict[str, str]) -> bytes:
-    """Replaces placeholders using byte replacement."""
-    # (Same as previous version)
     if not replacements:
         print("No replacement values provided via -D arguments.")
         return content
@@ -212,10 +214,7 @@ def replace_placeholders(content: bytes, replacements: dict[str, str]) -> bytes:
             current_content = current_content.replace(placeholder, replacement_value)
     return current_content
 
-# --- File Upload/Download/Delete Operations ---
 async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, filename: str, content: bytes) -> str | None:
-    """Uploads content as a new temporary file."""
-    # (Same as previous version)
     temp_item_id = None
     try:
         response = await client.me.drive.items.by_drive_item_id(parent_folder_id).children.by_item_path(filename).content.put(content)
@@ -234,21 +233,14 @@ async def upload_temp_file(client: GraphServiceClient, parent_folder_id: str, fi
     return temp_item_id
 
 async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_path: str) -> bool:
-    """Requests PDF conversion and saves the result locally."""
     try:
         print(f"Requesting PDF conversion for item {item_id}...")
-        
-        # --- CORRECTED Block using dict ---
-        # Configure query parameters directly using a dictionary
         request_config = RequestConfiguration(
-             query_parameters = {'format': "pdf"} # Pass params as dict
+             query_parameters = {'format': "pdf"}
         )
-        # Make the call using the config object
         pdf_stream = await client.me.drive.items.by_drive_item_id(item_id).content.get(
             request_configuration=request_config
         )
-        # --- End CORRECTED Block ---
-
         if not pdf_stream:
              print("Error: PDF conversion did not return a content stream.", file=sys.stderr)
              return False
@@ -278,8 +270,6 @@ async def download_as_pdf(client: GraphServiceClient, item_id: str, output_file_
         return False
 
 async def delete_drive_item(client: GraphServiceClient, item_id: str) -> bool:
-    """Deletes a DriveItem by its ID."""
-    # (Same as previous version)
     try:
         await client.me.drive.items.by_drive_item_id(item_id).delete()
         print(f"Successfully deleted temporary item {item_id}.")
@@ -368,6 +358,7 @@ async def main(input_onedrive_path: str, output_local_path: str, definitions: di
                  await delete_drive_item(client, temp_item_id)
             else:
                  print(f"Skipping deletion of temporary file {temp_item_id} because PDF generation/saving failed.", file=sys.stderr)
+
 
     if local_save_successful:
         print("\nCover letter generation complete.")

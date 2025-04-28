@@ -9,11 +9,11 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 ## Installation
 
 1.  **Clone the repository or download the script.**
-    Then run:
+2.  **Install dependencies:** Run:
     ```bash
     pip install -r requirements.txt
     ```
-    *(Note: `python-docx` is required for scanning the template for placeholders. `requests` is included primarily as a potential fallback or for future extensions)*.
+    *(Make sure you have the `requirements.txt` file containing `msgraph-sdk`, `azure-identity`, `requests`, `python-dotenv`, `python-docx`, and potentially `msal-extensions`).*
 
 ## Prerequisites
 
@@ -27,34 +27,34 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
     * Click **Register**.
 * Note down the **Application (client) ID** from the app's overview page.
 * **Configure Authentication:** Navigate to your newly created App registration. Under the **`Manage`** section on the left menu, select **`Authentication`**. Ensure that under `Platform configurations`, you have the "Mobile and desktop applications" platform added with `http://localhost`. Also, scroll down to `Advanced settings` and ensure **"Allow public client flows"** is enabled (set to Yes).
-* **API Permissions:** Under the **`Manage`** section on the left menu, select **`API permissions`**. Click `+ Add a permission`, select `Microsoft Graph`, then `Delegated permissions`. Search for and add `Files.ReadWrite`. Ensure this permission has been granted admin consent if required by your organization (though usually not needed for personal accounts and basic delegated permissions).
+* **API Permissions:** Under the **`Manage`** section on the left menu, select **`API permissions`**. Click `+ Add a permission`, select `Microsoft Graph`, then `Delegated permissions`. Search for and add `Files.ReadWrite`. Ensure this permission has been granted admin consent if required by your organization.
 
 ### 2. Script Configuration (`.env` file):
 
-* The script requires the **Application (client) ID** from your app registration. The recommended way to provide this is via a `.env` file.
-* Create a file named `.env` in the same directory as the `recover.py` script.
-* Add the following line to the `.env` file, replacing the placeholder with your actual Client ID:
+* Create a file named `.env` in the same directory as `recover.py`.
+* Add your Client ID:
     ```
     RECOVERLETTE_CLIENT_ID=your-client-id-here
     ```
-* *(Optional)* You can also set the `RECOVERLETTE_TENANT_ID` in the `.env` file if you need to target a specific tenant. If not set, it defaults to `consumers` for personal Microsoft accounts.
+* *(Optional)* Add Tenant ID if not using personal accounts (defaults to `consumers`):
     ```
-    # Optional: Set if not using 'consumers' tenant
     # RECOVERLETTE_TENANT_ID=your-tenant-id-here
     ```
-* **Important:** Ensure the `.env` file is included in your `.gitignore` if you are using version control.
-
-* **Alternative (Overrides .env):** Shell environment variables (`RECOVERLETTE_CLIENT_ID`, `RECOVERLETTE_TENANT_ID`) will override values in the `.env` file if set.
+* **Important:** Ensure the `.env` file is included in your `.gitignore`.
+* **Alternative (Overrides .env):** Shell environment variables will override `.env` values if set.
 
 ### 3. Template Preparation:
 
 * Create your cover letter template as a `.docx` file and upload it to your OneDrive.
-* In your template, use placeholders enclosed in double curly braces (`{{...}}`) for any text you want the script to replace, e.g., `{{COMPANY}}`, `{{PositionTitle}}`.
-* **Ignoring Undefined Placeholders:** If you have placeholders you *don't* always want to define via `-D` (perhaps for optional content) and you don't want warnings about them, start their name with `ADDL_`. For example: `{{ADDL_OptionalParagraph}}`. The script will ignore these during the undefined variable check if no corresponding `-D ADDL_OptionalParagraph=...` is provided.
+* Use placeholders like `{{COMPANY}}`, `{{PositionTitle}}`, etc.
+* **Ignoring Undefined Placeholders:** Placeholders starting with `ADDL_` (e.g., `{{ADDL_OptionalInfo}}`) will be ignored by the warning system if no corresponding `-D` argument is provided.
 
-## Authentication Flow
+## Authentication Flow & Token Caching
 
-Uses `DeviceCodeCredential`. When run, you will be prompted in the console to go to `https://microsoft.com/devicelogin`, enter a code provided in the console, and sign in to grant permissions. *(See TODO: Implement token caching).*
+* This script uses the `DeviceCodeCredential` from `azure-identity` **with persistent token caching enabled**.
+* **First Run:** You will be prompted in the console to go to `https://microsoft.com/devicelogin`, enter a code, and sign in to grant permissions.
+* **Subsequent Runs:** The script will attempt to silently use the cached token. You should *not* need to authenticate via the browser again unless the cached token/refresh token expires or becomes invalid.
+* The cache is stored securely using OS-level protection (via the `msal-extensions` library). The cache file is typically named based on the `name` parameter in `TokenCachePersistenceOptions` (currently "recoverlette_cache").
 
 ## Usage
 
@@ -88,7 +88,6 @@ options:
 
 ```bash
 # Assuming template contains {{COMPANY}}, {{PositionTitle}}, {{ContactPerson}}, {{ADDL_Note}}
-# We define replacements only for the first three.
 python recover.py -i "JobApps/Templates/StandardCoverLetter.docx" \
                   -o "ExampleCorp_SWE_CoverLetter.pdf" \
                   -D COMPANY="Example Corp" \
@@ -98,31 +97,39 @@ python recover.py -i "JobApps/Templates/StandardCoverLetter.docx" \
 
 ## Workflow
 
-1.  Loads configuration from `.env` / environment variables.
-2.  Authenticates the user (device code flow).
+1.  Loads configuration.
+2.  Authenticates the user (using device code flow *or* cached token).
 3.  Downloads the original template (`-i`).
-4.  **Scans the template** using `python-docx` to find all `{{KEY}}` placeholders.
-5.  Compares found placeholders against keys provided via `-D`.
-6.  **Prints a warning** if any placeholders are found in the template that were not defined via `-D` AND do not start with `ADDL_`.
-7.  Replaces defined placeholders in the content locally (using simple byte replacement). Undefined placeholders (including `ADDL_` ones if not defined) remain in the text.
-8.  Uploads the modified content as a **new temporary file** in OneDrive.
-9.  Requests Microsoft Graph to convert the **temporary file** to PDF.
-10. Downloads the resulting PDF.
-11. Saves the PDF locally (`-o`).
-12. If PDF download/save succeeded, **deletes the temporary file** from OneDrive.
-
-This ensures your original template is untouched, allows flexible placeholders, and warns about potentially missed replacements.
+4.  Scans the template for `{{KEY}}` placeholders.
+5.  Warns about any undefined placeholders (unless they start with `ADDL_`).
+6.  Replaces defined placeholders.
+7.  Uploads modified content as a temporary file.
+8.  Converts temporary file to PDF via Graph API.
+9.  Downloads the PDF.
+10. Saves PDF locally (`-o`).
+11. If successful, deletes the temporary file from OneDrive.
 
 ## TODO
 
 ### High Priority / Next
-* **Token Caching:** Implement token caching using `azure-identity` capabilities.
-* **Error Handling:** Improve error handling (e.g., temporary file deletion failures, empty PDF checks).
+* **Error Handling:** Improve error handling (e.g., temporary file deletion failures, empty PDF checks, token cache errors).
 * **User Confirmation:** Optionally add a prompt asking the user to confirm proceeding if undefined placeholders are found.
 
 ### Lower Priority / Future Ideas
-* **File Locations:** Improve handling of OneDrive paths (e.g., shared folders).
+* **File Locations:** Improve handling of OneDrive paths.
 * **Local File Support:** Add options for local `.docx` input/output.
 * **Font/Style Modification:** Explore options for formatting.
-* **Alternative Auth Flows:** Support `InteractiveBrowserCredential` etc.
+* **Alternative Auth Flows:** Support `InteractiveBrowserCredential` etc. (Note: Caching works similarly).
+```
 
+**Updated `requirements.txt`:**
+```
+msgraph-sdk>=1.0.0
+azure-identity>=1.12.0
+requests
+python-dotenv>=1.0.0
+python-docx>=1.1.0
+msal-extensions>=1.0.0 # Added for persistent token caching
+```
+
+Now, when you run the script, `azure-identity` (with the help of `msal-extensions`) should create a secure cache file. After the first successful login, subsequent runs should be silent until the cached tokens expire. Remember to install `msal-extensions` by updating your `requirements.txt` and running `pip install -r requirements.txt` again.
