@@ -22,7 +22,7 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 * Register an application in the Microsoft Entra admin center (formerly Azure portal).
 * Note down the **Application (client) ID**.
 * Configure **Authentication**: Add "Mobile and desktop applications" platform with `http://localhost` redirect URI, and enable "Allow public client flows".
-* Configure **API Permissions**: Add `Microsoft Graph` -> `Delegated permissions` -> `Files.ReadWrite`.
+* Configure **API Permissions**: Add `Microsoft Graph` -> `Delegated permissions` -> `Files.ReadWrite` and `User.Read`. Ensure admin consent is granted if needed (usually not for these delegated permissions on personal accounts).
 
 *(See previous README versions for detailed steps if needed).*
 
@@ -41,9 +41,13 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 
 ## Authentication Flow & Token Caching
 
-* Uses `DeviceCodeCredential` with persistent token caching (via `msal-extensions`).
-* **First Run:** Requires browser interaction with `microsoft.com/devicelogin` and code entry.
-* **Subsequent Runs:** Attempts to use cached token silently. Re-authentication needed only if cache expires/invalid.
+* This script uses the `DeviceCodeCredential` from `azure-identity` **with persistent token caching enabled**.
+* **First Run & Consent:** When you run the script for the *very first time*, or after the app's requested permissions change (e.g., adding `User.Read`), the authentication process will require you to grant consent.
+    1.  You will be prompted in the console to go to `https://microsoft.com/devicelogin` and enter a code.
+    2.  After entering the code and signing in, you will likely see a screen asking you to **accept the permissions** requested by the application (e.g., "Read your profile", "Read and write your files").
+    3.  You must accept these permissions for the application to work. This consent is typically stored by Microsoft, so you shouldn't need to grant permissions again on subsequent runs unless the requested scopes change.
+* **Subsequent Runs:** After the initial consent, the script will attempt to silently use the cached token. You should *not* need to authenticate via the browser again unless the cached token/refresh token expires or becomes invalid.
+* The cache is stored securely using OS-level protection (via the `msal-extensions` library).
 
 ## Usage
 
@@ -84,23 +88,23 @@ python recover.py -v -i "JobApps/Templates/CoverLetter.docx" -o "Output/MyCompan
 ## Workflow
 
 1.  Loads config (`.env`).
-2.  Authenticates (device code or cache).
-3.  Downloads template (`-i`).
-4.  Scans template for placeholders.
+2.  Authenticates the user (device code or cache, may require one-time consent).
+3.  Downloads the original template (`-i`).
+4.  Scans the template for placeholders.
 5.  Warns about undefined (non-`ADDL_`) placeholders.
 6.  Replaces defined placeholders (`-D`).
-7.  Uploads modified content to temporary file in OneDrive.
+7.  Uploads modified content as a temporary file in OneDrive.
 8.  Converts temporary file to PDF via Graph API.
-9.  Downloads PDF.
+9.  Downloads the PDF.
 10. Saves PDF locally (`-o`).
-11. If successful, deletes temporary file.
+11. If successful, deletes the temporary file from OneDrive.
 
 ## Troubleshooting
 
-* **Stuck after authentication:** If the console shows authentication successful but nothing else happens, run with `-v` or `--verbose` flag. Check the debug logs, especially around the "Attempting client.me.get()" message. This step verifies the token works. If it hangs here, there might be network issues or problems with the token cache/refresh.
+* **Stuck after authentication / 400 Errors:** If the console seems to hang after browser authentication or logs show 400 errors during polling, ensure you have completed the **consent step** in the browser the first time you run the app or after permissions change. Try clearing the token cache (`recoverlette_cache` file) and running again. Use the `-v` flag for detailed logs.
 * **Import Errors:** Ensure all dependencies in `requirements.txt` are installed (`pip install -r requirements.txt`).
-* **Permissions Errors:** Check the API permissions in your Azure App Registration.
-* **Cache Issues:** If caching seems broken, you might need to locate and delete the cache file (its location depends on `msal-extensions` and your OS) to force a fresh login. The cache name is set to `recoverlette_cache`.
+* **Permissions Errors:** Check API permissions in Azure App Registration match required scopes (`Files.ReadWrite`, `User.Read`).
+* **Cache Issues:** Locate and delete the cache file (`recoverlette_cache`) to force a fresh login if caching seems broken.
 
 ## TODO
 
@@ -112,4 +116,4 @@ python recover.py -v -i "JobApps/Templates/CoverLetter.docx" -o "Output/MyCompan
 * **File Locations:** Improve handling of OneDrive paths.
 * **Local File Support:** Add options for local `.docx` input/output.
 * **Font/Style Modification:** Explore options for formatting.
-* **Alternative Auth Flows:** Support `InteractiveBrowserCredential` etc.
+* **Alternative Auth Flows:** Support `InteractiveBrowserCredential` etc. (Note: Caching works similarly, consent still required initially).
