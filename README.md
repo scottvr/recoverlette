@@ -14,7 +14,7 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
     msgraph-sdk>=1.0.0
     azure-identity>=1.12.0
     requests
-    python-dotenv>=1.0.0 
+    python-dotenv>=1.0.0
     ```
     Then run:
     ```bash
@@ -47,7 +47,7 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 * *(Optional)* You can also set the `RECOVERLETTE_TENANT_ID` in the `.env` file if you need to target a specific tenant (e.g., for work/school accounts). If not set, it defaults to `consumers` for personal Microsoft accounts. Add this line if needed:
     ```
     # Optional: Set if not using 'consumers' tenant
-    # RECOVERLETTE_TENANT_ID=your-tenant-id-here 
+    # RECOVERLETTE_TENANT_ID=your-tenant-id-here
     ```
 * **Important:** Ensure the `.env` file is included in your `.gitignore` if you are using version control, to avoid accidentally committing your Client ID.
 
@@ -56,7 +56,8 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 ### 3. Template Preparation:
 
 * Create your cover letter template as a `.docx` file and upload it to your OneDrive.
-* Modify the template so that the exact strings `{{COMPANY}}`, `{{ATTN_NAME}}`, and `{{ATTN_TITLE}}` appear where you want the script to insert the relevant information. **The placeholders must match exactly.**
+* In your template, use placeholders enclosed in double curly braces for any text you want the script to replace. For example: `{{COMPANY}}`, `{{PositionTitle}}`, `{{HiringManager}}`, `{{MySkill}}`, etc.
+* The text inside the braces will correspond to the `KEY` you provide on the command line using the `-D` argument.
 
 ## Authentication Flow
 
@@ -79,26 +80,39 @@ The script runs asynchronously using Python's `asyncio`.
 ```bash
 python recover.py -h
 
-usage: python recover.py [-h] -i INPUT --company COMPANY --attn_name ATTN_NAME --attn_title ATTN_TITLE -o OUTPUT
+usage: python recover.py [-h] -i INPUT -o OUTPUT [-D KEY=VALUE [KEY=VALUE ...]]
 
-Generate a customized cover letter from a OneDrive template and save as local PDF
+Generate a customized cover letter from a OneDrive template and save as local PDF.
 
 options:
   -h, --help            show this help message and exit
   -i INPUT, --input INPUT
-                        OneDrive path to the input template (.docx) file (e.g., 'Documents/CoverLetterTemplate.docx')
-  --company COMPANY     Company name
-  --attn_name ATTN_NAME Attention name
-  --attn_title ATTN_TITLE Attention title
+                        OneDrive path to the input template (.docx) file (e.g.,
+                        'Documents/CoverLetterTemplate.docx')
   -o OUTPUT, --output OUTPUT
-                        Local file path to save the output PDF (e.g., 'MyCoverLetter.pdf')
+                        Local file path to save the output PDF (e.g.,
+                        'MyCoverLetter.pdf')
+  -D KEY=VALUE [KEY=VALUE ...], --define KEY=VALUE [KEY=VALUE ...]
+                        Define placeholder replacements. Use the format KEY=VALUE.
+                        The script will replace occurrences of {{KEY}} in the template
+                        with VALUE.
+                        Multiple -D arguments can be provided, or multiple KEY=VALUE
+                        pairs after one -D.
+                        Example: -D COMPANY="Example Inc." -D ATTN_NAME="Ms. Smith"
+
 ```
 
 **Example:**
 
+Assuming your template contains `{{COMPANY}}`, `{{PositionTitle}}`, and `{{ContactPerson}}`:
+
 ```bash
 # Ensure .env file exists with RECOVERLETTE_CLIENT_ID set!
-python recover.py -i "JobApps/Templates/StandardCoverLetter.docx" --company "Example Corp" --attn_name "Jane Doe" --attn_title "Hiring Manager" -o "ExampleCorp_CoverLetter.pdf"
+python recover.py -i "JobApps/Templates/StandardCoverLetter.docx" \
+                  -o "ExampleCorp_SWE_CoverLetter.pdf" \
+                  -D COMPANY="Example Corp" \
+                  -D PositionTitle="Software Engineer" \
+                  -D ContactPerson="Mr. John Doe"
 ```
 
 ## Workflow
@@ -107,14 +121,14 @@ The script now performs the following steps:
 1.  Loads configuration from the `.env` file and environment variables.
 2.  Authenticates the user using the device code flow.
 3.  Downloads the original template content from the OneDrive path specified by `-i`.
-4.  Replaces the placeholders (`{{COMPANY}}`, `{{ATTN_NAME}}`, `{{ATTN_TITLE}}`) in the content locally.
+4.  Replaces placeholders (e.g., `{{KEY}}`) in the content locally based on the `KEY=VALUE` pairs provided via the `-D` arguments.
 5.  Uploads this modified content as a **new temporary file** to the same folder in OneDrive (with a unique name like `original_temp_uuid.docx`).
 6.  Requests Microsoft Graph to convert this **temporary file** to PDF format.
 7.  Downloads the resulting PDF content stream.
 8.  Saves the PDF content locally to the path specified by `-o`.
 9.  If the PDF download and local save were successful, it **deletes the temporary file** from OneDrive.
 
-This ensures your original template file remains untouched.
+This ensures your original template file remains untouched and allows for flexible placeholder definitions.
 
 ## TODO
 
@@ -124,8 +138,9 @@ This ensures your original template file remains untouched.
 
 ### Lower Priority / Future Ideas
 * **File Locations:** Improve handling of OneDrive paths (e.g., support shared folders, different drive IDs?).
-* **Text Body Replacement:** Add an option to replace the entire cover letter body text, not just placeholders.
 * **Local File Support:** Add options to use local `.docx` files as input/output directly.
-* **Font/Style Modification:** Explore options to modify text formatting (font, size, color) if possible via Graph API or document manipulation before upload.
+* **Font/Style Modification:** Explore options to modify text formatting (font, size, color) if possible via Graph API or document manipulation before upload. *(Note: Simple text replacement won't preserve formatting applied only to the placeholder itself).*
 * **Alternative Auth Flows:** Support other credential types from `azure-identity` if needed (e.g., `InteractiveBrowserCredential`).
+* **Input Validation:** Add validation for `-D` keys (e.g., disallow spaces or special characters if they cause issues).
+
 
