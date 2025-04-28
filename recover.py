@@ -24,7 +24,7 @@ except ImportError:
 # --- End python-docx dependency ---
 
 # Authentication & SDK Core
-from azure.identity.aio import DeviceCodeCredential
+from azure.identity import DeviceCodeCredential
 from msgraph import GraphServiceClient
 from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 from msgraph.generated.models.drive_item import DriveItem
