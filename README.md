@@ -13,7 +13,6 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
     ```bash
     pip install -r requirements.txt
     ```
-    *(Make sure you have the `requirements.txt` file containing `msgraph-sdk`, `azure-identity`, `requests`, `python-dotenv`, `python-docx`, and `msal-extensions`).*
 
 ## Prerequisites
 
@@ -36,10 +35,10 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
 ### 3. Template Preparation:
 
 * Create `.docx` template in OneDrive.
-* Use `{{PLACEHOLDER_KEY}}` for replacements.
+* Use `[[PLACEHOLDER_KEY]]` for replacements.
 * **Handling Undefined Placeholders:**
-    * If a placeholder like `{{NormalKey}}` is found in the template but not defined via a `-D` argument, a warning will be printed, and the placeholder will remain unchanged in the output PDF.
-    * If a placeholder starts with `ADDL_` (e.g., `{{ADDL_OptionalInfo}}`) and it is *not* defined via a `-D` argument, it will be silently **removed** (replaced with an empty string) from the document before PDF conversion. This is useful for optional paragraphs or sections.
+    * If a placeholder like `[[NormalKey]]` is found in the template but not defined via a `-D` argument, a warning will be printed, and the placeholder will remain unchanged in the output PDF.
+    * If a placeholder starts with `ADDL_` (e.g., `[[ADDL_OptionalInfo]]`) and it is *not* defined via a `-D` argument, it will be silently **removed** (replaced with an empty string) from the document before PDF conversion. This is useful for optional paragraphs or sections.
 
 ## Authentication Flow & Token Caching
 
