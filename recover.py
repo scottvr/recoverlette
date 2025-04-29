@@ -81,7 +81,11 @@ async def get_authenticated_client() -> GraphServiceClient | None:
     logger.info(f"Using Client ID: ***{CLIENT_ID[-4:]}")
     logger.info(f"Using Tenant ID: {TENANT_ID}")
 
-    cache_options = TokenCachePersistenceOptions(name="recoverlette_cache")
+    cache_options = TokenCachePersistenceOptions(
+      name="recoverlette_cache",
+      allow_unencrypted_storage=True
+    )
+    
     logger.debug("TokenCachePersistenceOptions created (name='recoverlette_cache').")
 
     credential = None
