@@ -72,7 +72,19 @@ options:
                         pairs after one -D.
                         Example: -D COMPANY="Example Inc." -D ATTN_NAME="Ms. Smith"
   -v, --verbose         Enable verbose (DEBUG level) logging.
+  --preserve-color      Attempt to preserve original font color during replacement instead of forcing black.
+  --force-all-black     Will attempt to force *all* text to black, not just replaced placeholders. Due to styles or some such nonsense, this does not always work.
 ```
+
+### Color Handling (`--preserve-color` option)
+By default, when `recoverlette` replaces a placeholder (e.g., `@KEY@`), it attempts to reset the style of the modified text run and forces its font color to black. This ensures consistency, especially if placeholders were accidentally formatted with different colors in the template.
+
+However, if you have intentionally formatted a placeholder with a specific color (e.g., making `@COMPANY@` red) and you want the replacement text (e.g., "Example Corp") to *inherit* that same color, you can use the `--preserve-color` flag.
+
+* **Default (without `--preserve-color`):** Text resulting from placeholder replacement is forced to black color and the run's character style is reset (if 'Default Paragraph Font' style is found).
+* **With `--preserve-color`:** The script attempts to read the original color (RGB or theme color) of the run containing the placeholder *before* replacement and reapplies it *after* the text is replaced.
+
+**Important:** This option only affects the text runs where a placeholder replacement actually occurs. All other text in the document retains its original formatting and color regardless of whether this flag is used. The underlying `python-docx` library handles the replacement, and complex formatting spanning multiple runs might still lead to unexpected results.
 
 **Example:**
 

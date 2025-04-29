@@ -294,13 +294,14 @@ async def get_file_content(client: GraphServiceClient, drive_id: str, item_id: s
         return None
 
 # --- Placeholder Replacement ---
-def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, str], addl_to_remove: set[str], preserve_color: bool) -> bytes | None:
+def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, str], addl_to_remove: set[str], preserve_color: bool, force_all_black: bool) -> bytes | None:
     """
     Replaces placeholders ([[KEY]]) in DOCX content using python-docx.
     """
     logger = logging.getLogger(__name__)
     logging.info("Performing replacements using python-docx...")
-    if preserve_color: logger.info("Attempting to preserve original font color.")
+    if force_all_black: logger.info("Will force all text runs to black after replacements.")
+    elif preserve_color: logger.info("Attempting to preserve original font color.")
     else: logger.info("Forcing color to black for modified runs.")
         
     try:
@@ -348,7 +349,7 @@ def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, s
                      run.text = text_to_modify 
 
                      # Apply color based on flag
-                     if preserve_color:
+                     if preserve_color and not force_all_black:
                           logger.debug(f"  Attempting preserve color: RGB={original_color_rgb}, Theme={original_theme_color}")
                           run.font.color.rgb = None 
                           run.font.color.theme_color = None
@@ -358,7 +359,8 @@ def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, s
                           elif original_theme_color is not None:
                               try: run.font.color.theme_color = original_theme_color
                               except Exception as theme_ex: logger.warning(f"Could not copy theme color ({original_theme_color}): {theme_ex}.")
-                     else:
+
+                     elif not force_all_black:
                           # Force color to black AND attempt to reset character style
                           logger.debug(f"  Forcing color to black and resetting style for run.")
                           if default_style:
@@ -372,14 +374,57 @@ def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, s
                                
                           run.font.color.rgb = RGBColor(0, 0, 0)
                           run.font.color.theme_color = None
+                     # else: do nothing here, let final loop handle it.
 
-        # Process paragraphs and tables
-        for para in document.paragraphs: process_paragraph_runs(para)
-        for table in document.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs: process_paragraph_runs(para)
-                                  
+        # Process paragraphs and tables for replacements
+        if all_replacements:
+            for para in document.paragraphs: process_paragraph_runs(para)
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for para in cell.paragraphs: process_paragraph_runs(para)
+            logging.info("Run-level replacements applied.")
+        else:
+             logging.info("No placeholder replacements to perform.")
+
+
+        # --- NEW: Force all runs to black if flag is set ---
+        if force_all_black:
+            logging.info("Applying --force-all-black...")
+            black_color = RGBColor(0, 0, 0)
+            run_count = 0
+            # Iterate through paragraphs
+            for para in document.paragraphs:
+                for run in para.runs:
+                    run.font.color.rgb = black_color
+                    run.font.color.theme_color = None # Ensure theme color is unset
+                    if run.style and hasattr(run.style, "font") and hasattr(run.style.font, "color"):
+                      try:
+                        run.style.font.color.rgb = black_color
+                        run.style.font.color.theme_color = None
+                        logging.debug(f"Painted it Black '{run.style.name}'.")
+                      except Exception as style_ex:
+                        logging.warning(f"Could not force style color to black for style '{run.style.name}'")
+                    run_count += 1
+            # Iterate through tables
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for para in cell.paragraphs:
+                            for run in para.runs:
+                                run.font.color.rgb = black_color
+                                run.font.color.theme_color = None
+                                if run.style and hasattr(run.style, "font") and hasattr(run.style.font, "color"):
+                                  try:
+                                    run.style.font.color.rgb = black_color
+                                    run.style.font.color.theme_color = None
+                                    logging.debug(f"Painted it Black '{run.style.name}'.")
+                                  except Exception as style_ex:
+                                    logging.warning(f"Could not force style color to black for '{run.style.name}'")
+
+                                run_count += 1
+            logging.info(f"Forced color to black for {run_count} runs in paragraphs and tables.")
+                                   
         # Save the modified document
         output_stream = io.BytesIO()
         document.save(output_stream)
@@ -513,7 +558,7 @@ async def delete_drive_item(client: GraphServiceClient, drive_id: str, item_id: 
 
 
 # --- Main Workflow ---
-async def main(input_onedrive_path: str, output_local_path: str, definitions: dict[str, str], preserve_color: bool):
+async def main(input_onedrive_path: str, output_local_path: str, definitions: dict[str, str], preserve_color: bool, force_all_black: bool):
     logger = logging.getLogger(__name__) # Get logger for main scope
     client = await get_authenticated_client()
     if not client:
@@ -554,7 +599,7 @@ async def main(input_onedrive_path: str, output_local_path: str, definitions: di
          if addl_to_remove: logger.info(f"The following undefined ADDL_ placeholders will be removed: {', '.join(sorted(list(addl_to_remove)))}")
     else: logger.info("No placeholders like [[...]] found in the template (or parsing failed).")
 
-    updated_content_or_none = replace_placeholders(original_content, definitions, addl_to_remove, preserve_color)
+    updated_content_or_none = replace_placeholders(original_content, definitions, addl_to_remove, preserve_color, force_all_black)
     if updated_content_or_none is None:
          logger.critical("Failed to replace placeholders in the document. Exiting.")
          return
@@ -631,7 +676,13 @@ if __name__ == "__main__":
         default=False,
         help="Attempt to preserve original font color during replacement instead of forcing black."
         )
-
+    parser.add_argument(
+        "--force-all-black",
+        action="store_true",
+        dest="force_all_black",
+        default=False,
+        help="Force ALL text runs in the document (paragraphs and tables) to black after replacements."
+        )
     args = parser.parse_args()
 
     # --- Configure Logging Level Based on Args ---
@@ -664,7 +715,7 @@ if __name__ == "__main__":
     # --- Run Main Async Function ---
     try:
         logger.info("Starting main execution.")
-        asyncio.run(main(args.input, args.output, args.definitions, args.preserve_color))
+        asyncio.run(main(args.input, args.output, args.definitions, args.preserve_color, args.force_all_black))
         logger.info("Main execution finished.")
     except KeyboardInterrupt:
          logger.warning("\nOperation cancelled by user.")
