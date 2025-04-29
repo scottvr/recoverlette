@@ -154,7 +154,7 @@ def find_placeholders_in_docx(content_bytes: bytes) -> set[str]:
     # (Same as previous version)
     logger = logging.getLogger(__name__)
     found_keys = set()
-    placeholder_pattern = re.compile(r"\{\{(.*?)\}\}")
+    placeholder_pattern = re.compile(r"\[\[(.*?)\]\]")
     logger.debug("Starting DOCX placeholder scan.")
     try:
         doc_stream = io.BytesIO(content_bytes)
@@ -322,7 +322,7 @@ def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, s
             full_text = "".join(run.text for run in inline)
             original_text = full_text
             for key, value in all_replacements.items():
-                 placeholder = f"{{{{{key}}}}}"
+                 placeholder = f"[[{key}]]"
                  if placeholder in full_text:
                      full_text = full_text.replace(placeholder, value)
                      logger.debug(f"  Replaced/Removed '{placeholder}' in text.")
