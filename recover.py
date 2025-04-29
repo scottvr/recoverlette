@@ -22,6 +22,8 @@ try:
     import docx
     from docx.text.paragraph import Paragraph
     from docx.text.run import Run
+    from docx.shared import RGBColor
+    from docx.enum.style import WD_STYLE_TYPE
 except ImportError:
     print("Error: The 'python-docx' library is required.", file=sys.stderr)
     print("Please install it using: pip install python-docx", file=sys.stderr)
@@ -41,23 +43,17 @@ from kiota_abstractions.default_query_parameters import QueryParameters
 CLIENT_ID = os.getenv("RECOVERLETTE_CLIENT_ID")
 TENANT_ID = os.getenv("RECOVERLETTE_TENANT_ID", "consumers")
 
-# Check if critical configuration is missing early
 if not CLIENT_ID:
-    # Use print here as logging is not configured yet
-    print("Error: Configuration variable RECOVERLETTE_CLIENT_ID is not set.", file=sys.stderr)
-    print("Please set this variable in a .env file or as an environment variable.", file=sys.stderr)
+    logging.critical("Error: Configuration variable RECOVERLETTE_CLIENT_ID is not set.")
     sys.exit(1)
 
 SCOPES = ['Files.ReadWrite', 'User.Read']
 
 # --- Configure Logging ---
-# Configure root logger - default level is INFO
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-# Get the specific logger for azure-identity and set its default level higher
-# to suppress its INFO messages unless verbose is enabled.
 az_identity_logger = logging.getLogger('azure.identity')
 az_identity_logger.setLevel(logging.WARNING)
+
 # --- End Configure Logging ---
 
 
@@ -77,7 +73,7 @@ class DefineAction(argparse.Action):
 auth_credential = None
 
 async def get_authenticated_client() -> GraphServiceClient | None:
-    """Creates and returns an authenticated GraphServiceClient with persistent token caching."""
+    """Creates and returns an authenticated GraphServiceClient."""
     global auth_credential
     # Use root logger for general script info
     logger = logging.getLogger(__name__)
@@ -150,58 +146,52 @@ async def get_authenticated_client() -> GraphServiceClient | None:
 
 # --- Placeholder Discovery ---
 def find_placeholders_in_docx(content_bytes: bytes) -> set[str]:
-    """Uses python-docx to find all unique placeholder keys {{KEY}}."""
-    # (Same as previous version)
+    """Uses python-docx to find all unique placeholder keys [[KEY]]."""
     logger = logging.getLogger(__name__)
     found_keys = set()
-    placeholder_pattern = re.compile(r"\[\[(.*?)\]\]")
-    logger.debug("Starting DOCX placeholder scan.")
+    # *** CHANGED REGEX to use @...@ delimiter ***
+    placeholder_pattern = re.compile(r"\[\[(.*?)\]\]") 
+    
+    logger.debug("Starting DOCX placeholder scan for [[...]].")
     try:
         doc_stream = io.BytesIO(content_bytes)
         document = docx.Document(doc_stream)
-        para_count = 0
+        # Iterate through paragraphs and tables (same structure as before)
         for para in document.paragraphs:
-            para_count += 1
-            matches = placeholder_pattern.findall(para.text)
-            if matches:
-                logger.debug(f"  Found in paragraph run: {matches}")
-                for match in matches:
-                    found_keys.add(match.strip())
+            for run in para.runs:
+                 matches = placeholder_pattern.findall(run.text)
+                 if matches:
+                     logger.debug(f"  Found in paragraph run: {matches}")
+                     for match in matches:
+                         found_keys.add(match.strip()) # Store key without @ symbols
+            # Check full paragraph text as fallback
             matches = placeholder_pattern.findall(para.text)
             if matches:
                 logger.debug(f"  Found in paragraph text: {matches}")
                 for match in matches:
-                    found_keys.add(match.strip())
-        logger.debug(f"Scanned {para_count} paragraphs.")
-        table_count = 0
+                    found_keys.add(match.strip()) # Store key without @ symbols
         for table in document.tables:
-            table_count += 1
-            row_count = 0
             for row in table.rows:
-                row_count += 1
-                cell_count = 0
                 for cell in row.cells:
-                    cell_count += 1
-                    cell_para_count = 0
                     for para in cell.paragraphs:
-                         cell_para_count +=1
-                         matches = placeholder_pattern.findall(para.text)
-                         if matches:
-                              logger.debug(f"  Found in table cell run: {matches}")
-                              for match in matches:
-                                   found_keys.add(match.strip())
+                         for run in para.runs:
+                              matches = placeholder_pattern.findall(run.text)
+                              if matches:
+                                   logger.debug(f"  Found in table cell run: {matches}")
+                                   for match in matches:
+                                       found_keys.add(match.strip())
                          matches = placeholder_pattern.findall(para.text)
                          if matches:
                              logger.debug(f"  Found in table cell paragraph text: {matches}")
                              for match in matches:
                                  found_keys.add(match.strip())
-        logger.debug(f"Scanned {table_count} tables.")
     except Exception as e:
         logger.warning(f"Error parsing DOCX template to find placeholders: {e}", exc_info=True)
         logger.warning("Placeholder reporting might be incomplete.")
         return set()
     logger.debug(f"Placeholder scan finished. Found unique keys: {found_keys}")
     return found_keys
+
 
 
 # --- Graph Operations ---
@@ -304,55 +294,102 @@ async def get_file_content(client: GraphServiceClient, drive_id: str, item_id: s
         return None
 
 # --- Placeholder Replacement ---
-# (replace_placeholders remains the same)
-def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, str], addl_to_remove: set[str]) -> bytes | None:
+def replace_placeholders(content_bytes: bytes, defined_replacements: dict[str, str], addl_to_remove: set[str], preserve_color: bool) -> bytes | None:
+    """
+    Replaces placeholders ([[KEY]]) in DOCX content using python-docx.
+    """
     logger = logging.getLogger(__name__)
     logging.info("Performing replacements using python-docx...")
+    if preserve_color: logger.info("Attempting to preserve original font color.")
+    else: logger.info("Forcing color to black for modified runs.")
+        
     try:
         doc_stream = io.BytesIO(content_bytes)
         document = docx.Document(doc_stream)
+
         all_replacements = {**defined_replacements}
         for key in addl_to_remove:
-             all_replacements[key] = ""
+             all_replacements[key] = "" 
+
         if not all_replacements:
             logger.info("No defined replacements or ADDL_ variables to remove.")
             return content_bytes
-        def replace_text_in_paragraph(paragraph):
-            inline = paragraph.runs
-            full_text = "".join(run.text for run in inline)
-            original_text = full_text
-            for key, value in all_replacements.items():
-                 placeholder = f"[[{key}]]"
-                 if placeholder in full_text:
-                     full_text = full_text.replace(placeholder, value)
-                     logger.debug(f"  Replaced/Removed '{placeholder}' in text.")
-            if full_text != original_text:
-                logger.debug(f"  Rewriting runs for paragraph: '{original_text[:50]}...' -> '{full_text[:50]}...'")
-                if inline:
-                     style = inline[0].style
-                     font = inline[0].font
-                     p = paragraph._p
-                     p.clear_content()
-                     new_run = paragraph.add_run(full_text, style=style)
-                     if font:
-                          new_run.font.name = font.name
-                          new_run.font.size = font.size
-                          new_run.font.bold = font.bold
-                          new_run.font.italic = font.italic
-                          new_run.font.underline = font.underline
-        for para in document.paragraphs: replace_text_in_paragraph(para)
+
+        # Find default character style if needed for reset
+        default_style = None
+        try:
+            default_style = document.styles['Default Paragraph Font']
+            if default_style.type != WD_STYLE_TYPE.CHARACTER:
+                logger.warning("'Default Paragraph Font' is not a Character style.")
+                default_style = None # Don't use it if it's not a character style
+        except KeyError:
+            logger.warning("'Default Paragraph Font' style not found.")
+
+
+        # Helper function
+        def process_paragraph_runs(paragraph):
+            for run in paragraph.runs:
+                original_text = run.text
+                text_to_modify = run.text
+                replacement_done_in_run = False
+                
+                original_color_rgb = run.font.color.rgb
+                original_theme_color = run.font.color.theme_color
+
+                for key, value in all_replacements.items():
+                     # *** USE NEW DELIMITER FORMAT ***
+                     placeholder = f"[[{key}]]" 
+                     if placeholder in text_to_modify:
+                         text_to_modify = text_to_modify.replace(placeholder, value)
+                         replacement_done_in_run = True
+                
+                if replacement_done_in_run:
+                     logger.debug(f"  Replacing text in run: '{original_text[:30]}...' -> '{text_to_modify[:30]}...'")
+                     run.text = text_to_modify 
+
+                     # Apply color based on flag
+                     if preserve_color:
+                          logger.debug(f"  Attempting preserve color: RGB={original_color_rgb}, Theme={original_theme_color}")
+                          run.font.color.rgb = None 
+                          run.font.color.theme_color = None
+                          if original_color_rgb is not None:
+                              try: run.font.color.rgb = RGBColor(original_color_rgb[0], original_color_rgb[1], original_color_rgb[2])
+                              except Exception as color_ex: logger.warning(f"Could not apply RGB color {original_color_rgb}: {color_ex}")
+                          elif original_theme_color is not None:
+                              try: run.font.color.theme_color = original_theme_color
+                              except Exception as theme_ex: logger.warning(f"Could not copy theme color ({original_theme_color}): {theme_ex}.")
+                     else:
+                          # Force color to black AND attempt to reset character style
+                          logger.debug(f"  Forcing color to black and resetting style for run.")
+                          if default_style:
+                               try:
+                                   run.style = default_style
+                                   logger.debug(f"    Applied style '{default_style.name}' to run.")
+                               except Exception as style_ex:
+                                    logger.warning(f"    Failed to apply style '{default_style.name}': {style_ex}")
+                          else:
+                               logger.debug("    Default character style not available, cannot reset run style.")
+                               
+                          run.font.color.rgb = RGBColor(0, 0, 0)
+                          run.font.color.theme_color = None
+
+        # Process paragraphs and tables
+        for para in document.paragraphs: process_paragraph_runs(para)
         for table in document.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    for para in cell.paragraphs: replace_text_in_paragraph(para)
+                    for para in cell.paragraphs: process_paragraph_runs(para)
+                                  
+        # Save the modified document
         output_stream = io.BytesIO()
         document.save(output_stream)
         output_stream.seek(0)
-        logger.info("Replacements applied successfully.")
+        logging.info("Run-level replacements applied successfully.")
         return output_stream.getvalue()
+
     except Exception as e:
-        logger.error(f"Error replacing placeholders using python-docx: {e}", exc_info=True)
-        return None
+        logging.error(f"Error replacing placeholders using python-docx: {e}", exc_info=True)
+        return None 
 
 
 # --- File Upload/Download/Delete Operations ---
@@ -476,8 +513,7 @@ async def delete_drive_item(client: GraphServiceClient, drive_id: str, item_id: 
 
 
 # --- Main Workflow ---
-# (main function remains the same)
-async def main(input_onedrive_path: str, output_local_path: str, definitions: dict[str, str]):
+async def main(input_onedrive_path: str, output_local_path: str, definitions: dict[str, str], preserve_color: bool):
     logger = logging.getLogger(__name__) # Get logger for main scope
     client = await get_authenticated_client()
     if not client:
@@ -512,13 +548,13 @@ async def main(input_onedrive_path: str, output_local_path: str, definitions: di
          if reportable_undefined:
              logger.warning("--- Undefined Placeholders Found ---")
              logger.warning("The following placeholders were found but not defined via -D:")
-             for ph in sorted(list(reportable_undefined)): logger.warning(f"  - {{ {{{ph}}} }}")
+             for ph in sorted(list(reportable_undefined)): logger.warning(f"  - [[{ph}]]")
              logger.warning("These placeholders will remain unchanged in the output PDF.")
          else: logger.info("All found non-ADDL_ placeholders have definitions provided via -D.")
          if addl_to_remove: logger.info(f"The following undefined ADDL_ placeholders will be removed: {', '.join(sorted(list(addl_to_remove)))}")
-    else: logger.info("No placeholders like {{...}} found in the template (or parsing failed).")
+    else: logger.info("No placeholders like [[...]] found in the template (or parsing failed).")
 
-    updated_content_or_none = replace_placeholders(original_content, definitions, addl_to_remove)
+    updated_content_or_none = replace_placeholders(original_content, definitions, addl_to_remove, preserve_color)
     if updated_content_or_none is None:
          logger.critical("Failed to replace placeholders in the document. Exiting.")
          return
@@ -579,7 +615,7 @@ if __name__ == "__main__":
         dest='definitions',
         default={},
         help="Define placeholder replacements. Use the format KEY=VALUE.\n"
-             "The script will replace occurrences of {{KEY}} in the template with VALUE.\n"
+             "The script will replace occurrences of [[KEY]] in the template with VALUE.\n"
              "Multiple -D arguments can be provided, or multiple KEY=VALUE pairs after one -D.\n"
              "Example: -D COMPANY=\"Example Inc.\" -D ATTN_NAME=\"Ms. Smith\""
         )
@@ -587,6 +623,13 @@ if __name__ == "__main__":
         "-v", "--verbose",
         action="store_true", # Simple flag for debug mode
         help="Enable verbose (DEBUG level) logging."
+        )
+    parser.add_argument(
+        "--preserve-color",
+        action="store_true",
+        dest="preserve_color",
+        default=False,
+        help="Attempt to preserve original font color during replacement instead of forcing black."
         )
 
     args = parser.parse_args()
@@ -621,7 +664,7 @@ if __name__ == "__main__":
     # --- Run Main Async Function ---
     try:
         logger.info("Starting main execution.")
-        asyncio.run(main(args.input, args.output, args.definitions))
+        asyncio.run(main(args.input, args.output, args.definitions, args.preserve_color))
         logger.info("Main execution finished.")
     except KeyboardInterrupt:
          logger.warning("\nOperation cancelled by user.")
