@@ -84,6 +84,7 @@ async def get_authenticated_client() -> GraphServiceClient | None:
     cache_options = TokenCachePersistenceOptions(
       name="recoverlette_cache",
       allow_unencrypted_storage=True
+      cache_path=str(Path.home() / ".recoverlette_token_cache")
     )
     
     logger.debug("TokenCachePersistenceOptions created (name='recoverlette_cache').")
