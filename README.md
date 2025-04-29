@@ -13,7 +13,6 @@ Moved to [the wiki](https://github.com/scottvr/recoverlette/wiki)
     ```bash
     pip install -r requirements.txt
     ```
-    *(Make sure you have the `requirements.txt` file containing `msgraph-sdk`, `azure-identity`, `requests`, `python-dotenv`, `python-docx`, and `msal-extensions`).*
 
 ## Prerequisites
 
